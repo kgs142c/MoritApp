@@ -88,18 +88,19 @@ function setupAutoUpdater() {
     autoUpdater.disableDifferentialDownload = true;
   } catch (_) {}
 
-  // GitHub provider picks correct artifact per OS (win / mac / linux)
+  // Prefer generic latest.yml feed on all platforms (more reliable than GitHub API rate limits).
+  // Files on release: latest.yml (win), latest-mac.yml, latest-linux.yml
   try {
     autoUpdater.setFeedURL({
-      provider: 'github',
-      owner: 'kgs142c',
-      repo: 'MoritApp'
+      provider: 'generic',
+      url: 'https://github.com/kgs142c/MoritApp/releases/latest/download/'
     });
   } catch (_) {
     try {
       autoUpdater.setFeedURL({
-        provider: 'generic',
-        url: 'https://github.com/kgs142c/MoritApp/releases/latest/download/'
+        provider: 'github',
+        owner: 'kgs142c',
+        repo: 'MoritApp'
       });
     } catch (__) {}
   }

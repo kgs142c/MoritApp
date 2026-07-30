@@ -1,6 +1,6 @@
 {
   "name": "morit-app",
-  "version": "1.0.13",
+  "version": "1.0.14",
   "description": "MoritApp multi-session desktop workspace client",
   "main": "main.js",
   "author": {
