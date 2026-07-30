@@ -570,23 +570,15 @@
       color: var(--text-strong);
     }
 
-    .token-row {
-      display: none;
-      flex: 1;
-      align-items: center;
-      gap: 6px;
-      min-width: 0;
+    /* Hidden: user/pass | refresh switch, sessions hint, token/login row */
+    .login-switch,
+    .token-row,
+    .standard-hint,
+    #modal-discord-opts {
+      display: none !important;
     }
-    .token-row.visible { display: flex; }
-
-    .standard-hint {
-      display: none;
-      flex: 1;
-      font-size: 12px;
-      color: var(--text-dim);
-      min-width: 0;
-    }
-    .standard-hint.visible { display: block; }
+    .token-row.visible { display: none !important; }
+    .standard-hint.visible { display: none !important; }
 
     .field {
       flex: 1;
@@ -896,6 +888,18 @@
       font-size: 11px;
       opacity: 0.75;
     }
+    /* While update WARNING is up, block interaction with the rest of the app */
+    body.update-lock #sidebar,
+    body.update-lock #content,
+    body.update-lock #resizer,
+    body.update-lock .app-titlebar {
+      pointer-events: none !important;
+      filter: brightness(0.45);
+    }
+    body.update-lock #update-warning {
+      pointer-events: auto !important;
+      filter: none !important;
+    }
   </style>
 </head>
 <body>
@@ -1117,7 +1121,9 @@ Use user/pass or refresh login per account. Data saves locally.</p>
     }
 
     let updateReadyVersion = null;
+    let updatePendingVersion = null; // any update in flight or ready
     let updatePulseTimer = null;
+    let updateForceTimer = null;
     let updatePulseRed = false;
     let updateModalOpen = false;
 
@@ -1193,9 +1199,15 @@ Use user/pass or refresh login per account. Data saves locally.</p>
     }
 
     function showUpdateWarningModal(opts) {
-      const version = (opts && opts.version) || updateReadyVersion || 'new';
+      const version =
+        (opts && opts.version) ||
+        updateReadyVersion ||
+        updatePendingVersion ||
+        'new';
       const preview = !!(opts && opts.preview);
       const ready = !!(opts && opts.ready) || (!preview && !!updateReadyVersion);
+      // Keep same message while open (don't re-randomize on force re-show)
+      const keepCopy = !!(opts && opts.keepCopy) && updateModalOpen;
       const msg = POSITIVE_UPDATE_MSGS[Math.floor(Math.random() * POSITIVE_UPDATE_MSGS.length)];
       const overlay = document.getElementById('update-warning');
       const title = document.getElementById('warn-title');
@@ -1205,9 +1217,11 @@ Use user/pass or refresh login per account. Data saves locally.</p>
       const btnInstall = document.getElementById('warn-install');
       if (!overlay) return;
 
-      if (title) title.innerHTML = '<span class="ico">⚠</span> ' + msg.title.replace(/^⚠\s*/, '');
-      if (body) body.innerHTML = msg.body;
-      if (foot) foot.innerHTML = msg.foot;
+      if (!keepCopy) {
+        if (title) title.innerHTML = '<span class="ico">⚠</span> ' + msg.title.replace(/^⚠\s*/, '');
+        if (body) body.innerHTML = msg.body;
+        if (foot) foot.innerHTML = msg.foot;
+      }
       if (ver) {
         ver.textContent = preview
           ? 'preview · v' + version + ' (not a real update yet)'
@@ -1222,17 +1236,60 @@ Use user/pass or refresh login per account. Data saves locally.</p>
       updateModalOpen = true;
       overlay.classList.add('open');
       overlay.setAttribute('aria-hidden', 'false');
+      // Hard block rest of UI while update is up
+      document.body.classList.add('update-lock');
       startUpdatePulse();
+      startForceUpdateNag();
     }
 
-    function hideUpdateWarningModal() {
+    function hideUpdateWarningModal(force) {
+      // Real updates cannot be dismissed — only preview or after install
+      if (!force && updatePendingVersion && !document.getElementById('warn-install')?.dataset?.preview) {
+        showUpdateWarningModal({
+          version: updateReadyVersion || updatePendingVersion,
+          ready: !!updateReadyVersion,
+          keepCopy: true
+        });
+        return;
+      }
       const overlay = document.getElementById('update-warning');
       if (overlay) {
         overlay.classList.remove('open');
         overlay.setAttribute('aria-hidden', 'true');
       }
       updateModalOpen = false;
+      document.body.classList.remove('update-lock');
       stopUpdatePulse();
+      if (force) stopForceUpdateNag();
+    }
+
+    function startForceUpdateNag() {
+      if (updateForceTimer) return;
+      // Re-open / keep on top even if user is busy in Discord
+      updateForceTimer = setInterval(() => {
+        if (!updatePendingVersion && !updateReadyVersion) return;
+        if (!updateModalOpen) {
+          showUpdateWarningModal({
+            version: updateReadyVersion || updatePendingVersion,
+            ready: !!updateReadyVersion,
+            keepCopy: false
+          });
+        } else {
+          // Ensure overlay stays open + focused
+          const overlay = document.getElementById('update-warning');
+          if (overlay && !overlay.classList.contains('open')) {
+            overlay.classList.add('open');
+            document.body.classList.add('update-lock');
+          }
+        }
+      }, 4000);
+    }
+
+    function stopForceUpdateNag() {
+      if (updateForceTimer) {
+        clearInterval(updateForceTimer);
+        updateForceTimer = null;
+      }
     }
 
     function wireAutoUpdateUI() {
@@ -1258,7 +1315,7 @@ Use user/pass or refresh login per account. Data saves locally.</p>
         btnInstall.addEventListener('click', () => {
           // Preview mode (dev): just close + toast
           if (btnInstall.dataset.preview === '1') {
-            hideUpdateWarningModal();
+            hideUpdateWarningModal(true);
             toast('Preview only — real install works on packaged builds');
             return;
           }
@@ -1274,30 +1331,51 @@ Use user/pass or refresh login per account. Data saves locally.</p>
         window.morit.onUpdateEvent((ev) => {
           if (!ev || !ev.type) return;
           if (ev.type === 'available') {
-            setUpdateBanner('Good news downloading… v' + (ev.version || ''), 'progress');
-            showUpdateWarningModal({ version: ev.version || 'new', ready: false });
+            updatePendingVersion = ev.version || 'new';
+            setUpdateBanner('Update v' + updatePendingVersion + ' downloading…', 'progress');
+            showUpdateWarningModal({ version: updatePendingVersion, ready: false });
             const bi = document.getElementById('warn-install');
             if (bi) bi.dataset.preview = '';
           } else if (ev.type === 'progress') {
-            setUpdateBanner('Downloading the glow-up… ' + (ev.percent || 0) + '%', 'progress');
+            setUpdateBanner('Downloading… ' + (ev.percent || 0) + '%', 'progress');
             const ver = document.getElementById('warn-ver');
             if (ver && updateModalOpen) {
               ver.textContent = 'downloading… ' + (ev.percent || 0) + '%';
             }
+            // Keep modal up during long Discord sessions
+            if (!updateModalOpen && updatePendingVersion) {
+              showUpdateWarningModal({ version: updatePendingVersion, ready: false, keepCopy: true });
+            }
           } else if (ev.type === 'downloaded') {
-            updateReadyVersion = ev.version || 'new';
-            setUpdateBanner('v' + updateReadyVersion + ' ready — click to open');
+            updateReadyVersion = ev.version || updatePendingVersion || 'new';
+            updatePendingVersion = updateReadyVersion;
+            setUpdateBanner('v' + updateReadyVersion + ' ready');
             showUpdateWarningModal({ version: updateReadyVersion, ready: true });
             const bi = document.getElementById('warn-install');
             if (bi) bi.dataset.preview = '';
-            toast('New version ready', {
-              clickable: true,
-              ms: 15000,
-              onClick: () => showUpdateWarningModal({ version: updateReadyVersion, ready: true })
-            });
           }
         });
       }
+
+      // If user alt-tabs back, force WARNING again
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && (updatePendingVersion || updateReadyVersion)) {
+          showUpdateWarningModal({
+            version: updateReadyVersion || updatePendingVersion,
+            ready: !!updateReadyVersion,
+            keepCopy: true
+          });
+        }
+      });
+      window.addEventListener('focus', () => {
+        if (updatePendingVersion || updateReadyVersion) {
+          showUpdateWarningModal({
+            version: updateReadyVersion || updatePendingVersion,
+            ready: !!updateReadyVersion,
+            keepCopy: true
+          });
+        }
+      });
 
       window.morit.getAppVersion().then(async (v) => {
         const cap = document.getElementById('app-caption');
@@ -2597,7 +2675,8 @@ Use user/pass or refresh login per account. Data saves locally.</p>
         els.nameInput.value = 'Account ' + (state.accounts.size + 1);
         state.modalMode = 'standard';
         els.confirmBtn.textContent = '+ Add Account';
-        document.getElementById('modal-discord-opts').style.display = 'block';
+        // login mode hidden — always standard (user/pass webview)
+        document.getElementById('modal-discord-opts').style.display = 'none';
       }
       els.modalModeSwitch.querySelectorAll('button').forEach((btn) => {
         btn.classList.toggle('active', btn.dataset.mode === state.modalMode);
@@ -2698,6 +2777,15 @@ Use user/pass or refresh login per account. Data saves locally.</p>
         if (wv) wv.reload();
       }
       if (e.key === 'Escape') {
+        // Cannot dismiss update WARNING with Escape
+        if (updatePendingVersion || updateReadyVersion || updateModalOpen) {
+          showUpdateWarningModal({
+            version: updateReadyVersion || updatePendingVersion || 'new',
+            ready: !!updateReadyVersion,
+            keepCopy: true
+          });
+          return;
+        }
         hideCtxMenu();
         closeAccountModal();
         els.hotkeysModal.classList.remove('open');

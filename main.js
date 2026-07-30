@@ -56,6 +56,7 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on('update-available', (info) => {
+    try { showMainWindow(); } catch (_) {}
     sendUpdateEvent({
       type: 'available',
       version: info && info.version,
@@ -77,6 +78,7 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on('update-downloaded', (info) => {
+    try { showMainWindow(); } catch (_) {}
     sendUpdateEvent({
       type: 'downloaded',
       version: info && info.version
@@ -94,10 +96,10 @@ function setupAutoUpdater() {
     autoUpdater.checkForUpdates().catch(() => {});
   };
 
-  // First check shortly after launch (let UI load)
-  setTimeout(check, 8000);
-  // Re-check every 4 hours while app runs
-  setInterval(check, 4 * 60 * 60 * 1000);
+  // First check soon after launch
+  setTimeout(check, 3000);
+  // Re-check often so busy users still get the WARNING
+  setInterval(check, 30 * 60 * 1000);
 }
 
 const AUDIO_EXT = new Set(['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.webm', '.aac', '.mp4']);
