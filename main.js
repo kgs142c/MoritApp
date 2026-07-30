@@ -48,12 +48,22 @@ function loadSavedData() {
         names: raw.names || {},
         tokens: raw.tokens || {},
         loginModes: raw.loginModes || {},
+        lastUrls: raw.lastUrls || {},
+        pages: raw.pages || {},
         theme: raw.theme || 'dark',
         sidebarWidth: raw.sidebarWidth || 260
       };
     }
   } catch (_) {}
-  return { names: {}, tokens: {}, loginModes: {}, theme: 'dark', sidebarWidth: 260 };
+  return {
+    names: {},
+    tokens: {},
+    loginModes: {},
+    lastUrls: {},
+    pages: {},
+    theme: 'dark',
+    sidebarWidth: 260
+  };
 }
 
 function saveSavedData(data) {
@@ -63,6 +73,8 @@ function saveSavedData(data) {
       names: data.names || {},
       tokens: data.tokens || {},
       loginModes: data.loginModes || {},
+      lastUrls: data.lastUrls || {},
+      pages: data.pages || {},
       theme: data.theme ?? current.theme,
       sidebarWidth: data.sidebarWidth ?? current.sidebarWidth
     };
@@ -150,8 +162,10 @@ function listMusicTracks() {
   });
 }
 
+let mainWindow = null;
+
 function createWindow() {
-  const win = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1360,
     height: 860,
     minWidth: 900,
@@ -168,15 +182,32 @@ function createWindow() {
     }
   });
 
-  win.once('ready-to-show', () => win.show());
-  win.loadFile(path.join(__dirname, 'index.html'));
-  win.setMenuBarVisibility(false);
-  return win;
+  mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.loadFile(path.join(__dirname, 'index.html'));
+  mainWindow.setMenuBarVisibility(false);
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
+  return mainWindow;
 }
 
 app.whenReady().then(() => {
   session.defaultSession.setUserAgent(CHROME_UA);
+  // Keep partition cookies/localStorage on disk (session survival after reboot)
+  app.setPath('userData', app.getPath('userData'));
   ensureMusicDir();
+
+  // Discord/external links: open inside app as a new tab (never a new OS window)
+  app.on('web-contents-created', (_event, contents) => {
+    contents.setWindowOpenHandler(({ url }) => {
+      try {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('open-in-app-tab', { url: url || '' });
+        }
+      } catch (_) {}
+      return { action: 'deny' };
+    });
+  });
 
   // Start with Windows login (also set by installer registry key)
   try {

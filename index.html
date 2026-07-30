@@ -196,6 +196,7 @@
       background: var(--sel);
       border-left-color: var(--success);
     }
+    /* smooth styles also defined near .panel */
 
     .account-main {
       flex: 1;
@@ -364,15 +365,104 @@
       height: 100%;
       display: flex;
       flex-direction: column;
-      /* Keep layout size even when inactive — only hide interaction/paint */
       z-index: 0;
       opacity: 0;
       pointer-events: none;
+      transition: opacity 0.18s ease;
     }
     .panel.active {
       z-index: 2;
       opacity: 1;
       pointer-events: auto;
+    }
+
+    .account-item {
+      transition: background 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
+    }
+    .account-item:active {
+      transform: scale(0.98);
+    }
+
+    /* In-app browser page tabs (Discord links open here) */
+    .page-tabs {
+      display: flex;
+      align-items: stretch;
+      gap: 0;
+      flex-shrink: 0;
+      height: 32px;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+      overflow-y: hidden;
+    }
+    .page-tabs::-webkit-scrollbar { height: 3px; }
+    .page-tabs::-webkit-scrollbar-thumb { background: #424242; }
+    .page-tab {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      max-width: 180px;
+      min-width: 80px;
+      padding: 0 8px 0 10px;
+      border-right: 1px solid var(--border);
+      color: var(--text-dim);
+      font-size: 11px;
+      cursor: pointer;
+      flex-shrink: 0;
+      user-select: none;
+      transition: background 0.12s ease, color 0.12s ease;
+    }
+    .page-tab:hover { background: var(--surface-2); color: var(--text); }
+    .page-tab.active {
+      background: var(--sel);
+      color: var(--text-strong);
+      box-shadow: inset 0 -2px 0 var(--success);
+    }
+    .page-tab-title {
+      flex: 1;
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      pointer-events: none;
+    }
+    .page-tab-close {
+      border: none;
+      background: transparent;
+      color: var(--text-dim);
+      font-family: var(--font);
+      font-size: 14px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0 2px;
+      width: 16px;
+      height: 16px;
+    }
+    .page-tab-close:hover { color: var(--danger); }
+    .page-tab.main .page-tab-close { visibility: hidden; }
+
+    .webview-host {
+      position: relative;
+      flex: 1 1 auto;
+      min-height: 0;
+      width: 100%;
+      overflow: hidden;
+      background: #0c0c0c;
+    }
+    .page-view {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      opacity: 0;
+      pointer-events: none;
+      z-index: 0;
+      transition: opacity 0.15s ease;
+    }
+    .page-view.active {
+      opacity: 1;
+      pointer-events: auto;
+      z-index: 1;
     }
 
     .toolbar {
@@ -748,17 +838,46 @@ Use user/pass or token login per account.</p>
   <script>
     const MAX_ACCOUNTS = 50;
     const DISCORD_LOGIN = 'https://discord.com/login';
+    // App home — restores session without forcing login page after reboot
+    const DISCORD_APP = 'https://discord.com/channels/@me';
 
     const state = {
       accounts: new Map(),
       activeId: null,
       theme: 'dark',
       sidebarWidth: 240,
-      autoLogged: new Set(),
-      mounted: new Set(), // webview created
+      autoLogged: new Set(), // pageKey set — avoid re-inject every time
+      mounted: new Set(), // pageKey = accId + '::' + pageId
       modalMode: 'standard',
       modalEditId: null
     };
+
+    function pageKey(accId, pageId) {
+      return accId + '::' + pageId;
+    }
+
+    function titleFromUrl(url) {
+      try {
+        const u = new URL(url);
+        const host = u.hostname.replace(/^www\./, '');
+        const path = u.pathname.length > 1 ? u.pathname.slice(0, 28) : '';
+        return (host + path) || 'New tab';
+      } catch (_) {
+        return 'New tab';
+      }
+    }
+
+    function defaultPages(lastUrl) {
+      return [
+        {
+          id: 'main',
+          title: 'Discord',
+          url: lastUrl && String(lastUrl).includes('discord.com')
+            ? lastUrl
+            : DISCORD_APP
+        }
+      ];
+    }
 
     const els = {
       list: document.getElementById('account-list'),
@@ -916,15 +1035,41 @@ Use user/pass or token login per account.</p>
       const names = {};
       const tokens = {};
       const loginModes = {};
+      const lastUrls = {};
+      const pages = {};
       for (const [id, acc] of state.accounts) {
         names[id] = acc.name;
         tokens[id] = acc.token || '';
         loginModes[id] = acc.loginMode || 'standard';
+        // Snapshot current URLs from live webviews when possible
+        if (Array.isArray(acc.pages)) {
+          for (const p of acc.pages) {
+            const wv = document.getElementById('wv-' + pageKey(id, p.id));
+            if (wv) {
+              try {
+                const u = wv.getURL();
+                if (u && u !== 'about:blank') p.url = u;
+              } catch (_) {}
+            }
+          }
+          const main = acc.pages.find((p) => p.id === 'main') || acc.pages[0];
+          lastUrls[id] = (main && main.url) || DISCORD_APP;
+          pages[id] = {
+            activePageId: acc.activePageId || 'main',
+            list: acc.pages.map((p) => ({
+              id: p.id,
+              title: p.title,
+              url: p.url
+            }))
+          };
+        }
       }
       await window.morit.saveAppData({
         names,
         tokens,
         loginModes,
+        lastUrls,
+        pages,
         theme: state.theme,
         sidebarWidth: state.sidebarWidth
       });
@@ -985,8 +1130,12 @@ Use user/pass or token login per account.</p>
       hideCtxMenu();
       if (action === 'rename') openAccountModal(id);
       else if (action === 'reload') {
-        const wv = document.getElementById('wv-' + id);
-        if (wv) wv.reload();
+        const acc = state.accounts.get(id);
+        if (acc) {
+          const pid = acc.activePageId || 'main';
+          const wv = document.getElementById('wv-' + pageKey(id, pid));
+          if (wv) wv.reload();
+        }
         switchAccount(id);
       } else if (action === 'remove') {
         removeAccount(id);
@@ -1034,6 +1183,129 @@ Use user/pass or token login per account.</p>
       }
     }
 
+    function setPageLoading(accId, pageId, show, text) {
+      const el = document.getElementById('loading-' + pageKey(accId, pageId));
+      if (!el) return;
+      el.classList.toggle('hidden', !show);
+      if (text) el.textContent = text;
+    }
+
+    function renderPageTabs(acc) {
+      const bar = document.getElementById('pages-' + acc.id);
+      if (!bar) return;
+      bar.innerHTML = '';
+      for (const p of acc.pages) {
+        const tab = document.createElement('div');
+        tab.className =
+          'page-tab' +
+          (p.id === acc.activePageId ? ' active' : '') +
+          (p.id === 'main' ? ' main' : '');
+        tab.dataset.pageId = p.id;
+
+        const title = document.createElement('span');
+        title.className = 'page-tab-title';
+        title.textContent = p.title || 'Tab';
+        title.title = p.url || '';
+
+        const close = document.createElement('button');
+        close.className = 'page-tab-close';
+        close.type = 'button';
+        close.textContent = '×';
+        close.title = 'Close tab';
+        close.addEventListener('click', (e) => {
+          e.stopPropagation();
+          closePageTab(acc, p.id);
+        });
+
+        tab.append(title, close);
+        tab.addEventListener('click', () => switchPage(acc, p.id));
+        bar.appendChild(tab);
+      }
+    }
+
+    function switchPage(acc, pageId) {
+      if (!acc.pages.find((p) => p.id === pageId)) return;
+      acc.activePageId = pageId;
+      const host = document.getElementById('host-' + acc.id);
+      if (host) {
+        host.querySelectorAll('.page-view').forEach((v) => {
+          v.classList.toggle('active', v.dataset.pageId === pageId);
+        });
+      }
+      renderPageTabs(acc);
+      const key = pageKey(acc.id, pageId);
+      const wv = document.getElementById('wv-' + key);
+      if (wv) {
+        requestAnimationFrame(() => {
+          fixWebview(wv);
+          setTimeout(() => fixWebview(wv), 80);
+        });
+      } else {
+        const page = acc.pages.find((p) => p.id === pageId);
+        if (page) mountPageWebview(acc, page);
+      }
+      persist();
+    }
+
+    async function closePageTab(acc, pageId) {
+      if (pageId === 'main') return; // never close primary Discord tab
+      const idx = acc.pages.findIndex((p) => p.id === pageId);
+      if (idx < 0) return;
+      acc.pages.splice(idx, 1);
+      const view = document.getElementById('view-' + pageKey(acc.id, pageId));
+      if (view) view.remove();
+      state.mounted.delete(pageKey(acc.id, pageId));
+      if (acc.activePageId === pageId) {
+        acc.activePageId = 'main';
+        switchPage(acc, 'main');
+      } else {
+        renderPageTabs(acc);
+      }
+      await persist();
+    }
+
+    function openLinkAsPageTab(acc, url) {
+      if (!acc || !url) return;
+      // Ignore empty / about / javascript
+      if (/^(about:|javascript:|blob:)/i.test(url)) return;
+
+      // Reuse existing tab with same URL
+      const existing = acc.pages.find((p) => p.url === url);
+      if (existing) {
+        switchPage(acc, existing.id);
+        return;
+      }
+
+      const pageId = 'p' + Date.now().toString(36);
+      const page = {
+        id: pageId,
+        title: titleFromUrl(url),
+        url
+      };
+      acc.pages.push(page);
+
+      // Create DOM for page view
+      const host = document.getElementById('host-' + acc.id);
+      if (host) {
+        const view = document.createElement('div');
+        view.className = 'page-view';
+        view.id = 'view-' + pageKey(acc.id, pageId);
+        view.dataset.pageId = pageId;
+        view.innerHTML = `
+          <div class="webview-wrap" id="wrap-${pageKey(acc.id, pageId)}">
+            <div class="webview-loading" id="loading-${pageKey(acc.id, pageId)}">Opening…</div>
+          </div>
+        `;
+        host.appendChild(view);
+      }
+
+      acc.activePageId = pageId;
+      renderPageTabs(acc);
+      switchPage(acc, pageId);
+      mountPageWebview(acc, page);
+      toast('New tab');
+    }
+
     function wirePanelControls(acc) {
       const partition = 'persist:' + acc.id;
       const tokenInput = document.getElementById('token-' + acc.id);
@@ -1064,28 +1336,38 @@ Use user/pass or token login per account.</p>
 
       document.getElementById('login-' + acc.id).addEventListener('click', () => loginWithToken(acc.id));
       document.getElementById('clear-' + acc.id).addEventListener('click', async () => {
-        const wv = document.getElementById('wv-' + acc.id);
         setStatus(acc.id, 'Clearing…');
-        setLoading(acc.id, true, 'Clearing session…');
         await window.morit.clearPartition(partition);
-        state.autoLogged.delete(acc.id);
-        if (wv) wv.loadURL(DISCORD_LOGIN);
+        // Clear auto-login flags for this account
+        for (const k of [...state.autoLogged]) {
+          if (k.startsWith(acc.id + '::')) state.autoLogged.delete(k);
+        }
+        // Reload all pages to login
+        for (const p of acc.pages) {
+          const wv = document.getElementById('wv-' + pageKey(acc.id, p.id));
+          if (wv) {
+            p.url = DISCORD_LOGIN;
+            wv.loadURL(DISCORD_LOGIN);
+          }
+        }
         setStatus(acc.id, 'Session cleared', 'ok');
         setTimeout(() => setStatus(acc.id, ''), 2500);
+        await persist();
       });
     }
 
-    async function mountWebview(acc) {
-      if (state.mounted.has(acc.id)) {
-        fixWebview(document.getElementById('wv-' + acc.id));
+    async function mountPageWebview(acc, page) {
+      const key = pageKey(acc.id, page.id);
+      if (state.mounted.has(key)) {
+        fixWebview(document.getElementById('wv-' + key));
         return;
       }
 
       const partition = 'persist:' + acc.id;
-      const wrap = document.getElementById('wrap-' + acc.id);
+      const wrap = document.getElementById('wrap-' + key);
       if (!wrap) return;
 
-      setLoading(acc.id, true, 'Loading Discord…');
+      setPageLoading(acc.id, page.id, true, 'Loading…');
 
       let ua = '';
       try {
@@ -1096,43 +1378,84 @@ Use user/pass or token login per account.</p>
       }
 
       const wv = document.createElement('webview');
-      wv.id = 'wv-' + acc.id;
+      wv.id = 'wv-' + key;
       wv.setAttribute('partition', partition);
-      wv.setAttribute('allowpopups', '');
-      wv.setAttribute('webpreferences', 'contextIsolation=yes, javascript=yes, nodeIntegration=no, webSecurity=yes');
+      wv.setAttribute('allowpopups', 'true');
+      wv.setAttribute(
+        'webpreferences',
+        'contextIsolation=yes, javascript=yes, nodeIntegration=no, webSecurity=yes'
+      );
       if (ua) {
         try { wv.setAttribute('useragent', ua); } catch (_) {}
       }
 
       wrap.appendChild(wv);
-      state.mounted.add(acc.id);
-
-      // Size first, then navigate (prevents black gap)
+      state.mounted.add(key);
       fixWebview(wv);
 
-      wv.addEventListener('did-start-loading', () => setLoading(acc.id, true, 'Loading Discord…'));
+      wv.addEventListener('did-start-loading', () =>
+        setPageLoading(acc.id, page.id, true, 'Loading…')
+      );
       wv.addEventListener('did-stop-loading', () => {
-        setLoading(acc.id, false);
+        setPageLoading(acc.id, page.id, false);
         fixWebview(wv);
+        try {
+          const u = wv.getURL();
+          if (u && u !== 'about:blank') {
+            page.url = u;
+            page.title = page.id === 'main' ? 'Discord' : titleFromUrl(u);
+            renderPageTabs(acc);
+          }
+        } catch (_) {}
       });
       wv.addEventListener('did-fail-load', (e) => {
         if (e.errorCode === -3) return;
-        setLoading(acc.id, true, 'Failed: ' + (e.errorDescription || e.errorCode));
-        setStatus(acc.id, 'Load failed', 'err');
+        setPageLoading(acc.id, page.id, true, 'Failed: ' + (e.errorDescription || e.errorCode));
+        if (page.id === 'main') setStatus(acc.id, 'Load failed', 'err');
       });
       wv.addEventListener('dom-ready', () => {
-        setLoading(acc.id, false);
+        setPageLoading(acc.id, page.id, false);
         fixWebview(wv);
       });
-      wv.addEventListener('resize', () => fixWebview(wv));
+      wv.addEventListener('page-title-updated', (e) => {
+        if (page.id !== 'main' && e.title) {
+          page.title = e.title.slice(0, 40);
+          renderPageTabs(acc);
+        }
+      });
+      wv.addEventListener('did-navigate', (e) => {
+        if (e.url) {
+          page.url = e.url;
+          if (page.id !== 'main') page.title = titleFromUrl(e.url);
+          renderPageTabs(acc);
+        }
+      });
+      wv.addEventListener('did-navigate-in-page', (e) => {
+        if (e.url) {
+          page.url = e.url;
+        }
+      });
+      // Fallback for older Electron new-window
+      wv.addEventListener('new-window', (e) => {
+        const url = e.url;
+        if (url) openLinkAsPageTab(acc, url);
+      });
 
-      if (acc.loginMode === 'token' && acc.token) {
+      // Token auto-login only on Discord login page (session restore uses cookies first)
+      if (page.id === 'main' && acc.loginMode === 'token' && acc.token) {
         wv.addEventListener('dom-ready', async () => {
-          if (state.autoLogged.has(acc.id)) return;
+          if (state.autoLogged.has(key)) return;
           let url = '';
           try { url = wv.getURL(); } catch (_) {}
+          // If already in app (session alive), do NOT re-inject
+          if (url.includes('discord.com') && !url.includes('/login')) {
+            state.autoLogged.add(key);
+            setStatus(acc.id, 'Session restored', 'ok');
+            setTimeout(() => setStatus(acc.id, ''), 2000);
+            return;
+          }
           if (!url.includes('discord.com')) return;
-          state.autoLogged.add(acc.id);
+          state.autoLogged.add(key);
           setStatus(acc.id, 'Auto login…');
           try {
             await injectToken(wv, acc.token);
@@ -1140,21 +1463,59 @@ Use user/pass or token login per account.</p>
             setTimeout(() => setStatus(acc.id, ''), 3000);
           } catch (_) {
             setStatus(acc.id, 'Auto-login failed', 'err');
-            state.autoLogged.delete(acc.id);
+            state.autoLogged.delete(key);
           }
         }, { once: true });
       }
 
-      // Navigate after layout
+      // Restore session: open last Discord app URL, not always /login
+      const startUrl =
+        page.url ||
+        (page.id === 'main' ? DISCORD_APP : DISCORD_APP);
+
       requestAnimationFrame(() => {
         fixWebview(wv);
         try { if (ua) wv.setUserAgent(ua); } catch (_) {}
-        wv.src = DISCORD_LOGIN;
+        wv.src = startUrl;
       });
     }
 
+    async function mountWebview(acc) {
+      if (!acc) return;
+      if (!Array.isArray(acc.pages) || !acc.pages.length) {
+        acc.pages = defaultPages(null);
+        acc.activePageId = 'main';
+      }
+      // Ensure all page DOM shells exist, mount active first
+      const host = document.getElementById('host-' + acc.id);
+      if (host) {
+        for (const p of acc.pages) {
+          let view = document.getElementById('view-' + pageKey(acc.id, p.id));
+          if (!view) {
+            view = document.createElement('div');
+            view.className = 'page-view' + (p.id === acc.activePageId ? ' active' : '');
+            view.id = 'view-' + pageKey(acc.id, p.id);
+            view.dataset.pageId = p.id;
+            view.innerHTML = `
+              <div class="webview-wrap" id="wrap-${pageKey(acc.id, p.id)}">
+                <div class="webview-loading" id="loading-${pageKey(acc.id, p.id)}">Loading…</div>
+              </div>
+            `;
+            host.appendChild(view);
+          }
+        }
+      }
+      renderPageTabs(acc);
+      const active = acc.pages.find((p) => p.id === acc.activePageId) || acc.pages[0];
+      await mountPageWebview(acc, active);
+    }
+
     function createPanelShell(acc) {
-      // Panel chrome only — webview mounted lazily on first open
+      if (!Array.isArray(acc.pages) || !acc.pages.length) {
+        acc.pages = defaultPages(acc.lastUrl || null);
+        acc.activePageId = 'main';
+      }
+
       const panel = document.createElement('div');
       panel.className = 'panel';
       panel.id = 'panel-' + acc.id;
@@ -1166,7 +1527,7 @@ Use user/pass or token login per account.</p>
             <button type="button" data-mode="token">token</button>
           </div>
           <div class="standard-hint" id="hint-${acc.id}">
-            &gt; Discord login form (email/password or QR) — this account only
+            &gt; sessions persist after reboot · links open as in-app tabs
           </div>
           <div class="token-row" id="token-row-${acc.id}">
             <input class="field" id="token-${acc.id}" type="password" placeholder="paste token" autocomplete="off" spellcheck="false" />
@@ -1176,14 +1537,14 @@ Use user/pass or token login per account.</p>
           </div>
           <span class="status" id="status-${acc.id}"></span>
         </div>
-        <div class="webview-wrap" id="wrap-${acc.id}">
-          <div class="webview-loading" id="loading-${acc.id}">Loading Discord…</div>
-        </div>
+        <div class="page-tabs" id="pages-${acc.id}"></div>
+        <div class="webview-host" id="host-${acc.id}"></div>
       `;
 
       els.content.appendChild(panel);
       wirePanelControls(acc);
       applyLoginModeUI(acc.id);
+      renderPageTabs(acc);
     }
 
     async function loginWithToken(id) {
@@ -1194,7 +1555,8 @@ Use user/pass or token login per account.</p>
 
       const tokenInput = document.getElementById('token-' + id);
       const loginBtn = document.getElementById('login-' + id);
-      const wv = document.getElementById('wv-' + id);
+      const mainKey = pageKey(id, 'main');
+      let wv = document.getElementById('wv-' + mainKey);
       const token = cleanToken(tokenInput?.value || '');
 
       if (!token) { toast('Paste a Discord token first.'); return; }
@@ -1210,16 +1572,24 @@ Use user/pass or token login per account.</p>
       renderAccountList();
       await persist();
 
+      // Ensure main page is active for login
+      switchPage(acc, 'main');
+      wv = document.getElementById('wv-' + mainKey);
+      if (!wv) {
+        await mountPageWebview(acc, acc.pages.find((p) => p.id === 'main'));
+        wv = document.getElementById('wv-' + mainKey);
+      }
+
       if (loginBtn) loginBtn.disabled = true;
       setStatus(id, 'Logging in…');
-      setLoading(id, true, 'Injecting token…');
+      setPageLoading(id, 'main', true, 'Injecting token…');
 
       try {
         fixWebview(wv);
         wv.loadURL(DISCORD_LOGIN);
         await waitForEvent(wv, 'dom-ready', 25000);
         await injectToken(wv, token);
-        state.autoLogged.add(id);
+        state.autoLogged.add(mainKey);
         setStatus(id, 'OK — opening Discord…', 'ok');
         setTimeout(() => setStatus(id, ''), 4000);
       } catch (err) {
@@ -1238,13 +1608,15 @@ Use user/pass or token login per account.</p>
       const panel = document.getElementById('panel-' + id);
       if (panel) panel.classList.add('active');
 
-      // Mount webview only when needed, then force correct size
-      await mountWebview(state.accounts.get(id));
+      const acc = state.accounts.get(id);
+      await mountWebview(acc);
 
+      const pageId = (acc && acc.activePageId) || 'main';
+      const wv = document.getElementById('wv-' + pageKey(id, pageId));
       requestAnimationFrame(() => {
-        fixWebview(document.getElementById('wv-' + id));
-        setTimeout(() => fixWebview(document.getElementById('wv-' + id)), 100);
-        setTimeout(() => fixWebview(document.getElementById('wv-' + id)), 300);
+        fixWebview(wv);
+        setTimeout(() => fixWebview(wv), 100);
+        setTimeout(() => fixWebview(wv), 300);
       });
     }
 
@@ -1256,8 +1628,12 @@ Use user/pass or token login per account.</p>
       const panel = document.getElementById('panel-' + id);
       if (panel) panel.remove();
       state.accounts.delete(id);
-      state.autoLogged.delete(id);
-      state.mounted.delete(id);
+      for (const k of [...state.autoLogged]) {
+        if (k.startsWith(id + '::') || k === id) state.autoLogged.delete(k);
+      }
+      for (const k of [...state.mounted]) {
+        if (k.startsWith(id + '::')) state.mounted.delete(k);
+      }
 
       if (state.activeId === id) {
         const next = state.accounts.keys().next();
@@ -1274,6 +1650,22 @@ Use user/pass or token login per account.</p>
       await persist();
       toast('Account closed');
     }
+
+    // Links / window.open from Discord → new in-app tab (same account session)
+    window.morit.onOpenInAppTab(({ url }) => {
+      if (!url) return;
+      const acc = state.activeId ? state.accounts.get(state.activeId) : null;
+      if (!acc) return;
+      openLinkAsPageTab(acc, url);
+    });
+
+    // Save sessions on quit path (best-effort)
+    window.addEventListener('beforeunload', () => {
+      try { persist(); } catch (_) {}
+    });
+    setInterval(() => {
+      if (state.accounts.size) persist();
+    }, 45000);
 
     function openAccountModal(editId) {
       state.modalEditId = editId || null;
@@ -1317,7 +1709,14 @@ Use user/pass or token login per account.</p>
       } else {
         const id = nextAccountId();
         const name = els.nameInput.value.trim() || ('Account ' + (state.accounts.size + 1));
-        const acc = { id, name, token: '', loginMode: state.modalMode };
+        const acc = {
+          id,
+          name,
+          token: '',
+          loginMode: state.modalMode,
+          pages: defaultPages(null),
+          activePageId: 'main'
+        };
         state.accounts.set(id, acc);
         createPanelShell(acc);
         await switchAccount(id);
@@ -1367,7 +1766,10 @@ Use user/pass or token login per account.</p>
       if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
         e.preventDefault();
         if (!state.activeId) return;
-        const wv = document.getElementById('wv-' + state.activeId);
+        const acc = state.accounts.get(state.activeId);
+        if (!acc) return;
+        const pid = acc.activePageId || 'main';
+        const wv = document.getElementById('wv-' + pageKey(state.activeId, pid));
         if (!wv) return;
         if (e.key === 'ArrowLeft' && wv.canGoBack()) wv.goBack();
         if (e.key === 'ArrowRight' && wv.canGoForward()) wv.goForward();
@@ -1375,7 +1777,10 @@ Use user/pass or token login per account.</p>
       if (mod && (e.key === 'r' || e.key === 'R')) {
         if (!state.activeId) return;
         e.preventDefault();
-        const wv = document.getElementById('wv-' + state.activeId);
+        const acc = state.accounts.get(state.activeId);
+        if (!acc) return;
+        const pid = acc.activePageId || 'main';
+        const wv = document.getElementById('wv-' + pageKey(state.activeId, pid));
         if (wv) wv.reload();
       }
       if (e.key === 'Escape') {
@@ -1609,15 +2014,40 @@ Use user/pass or token login per account.</p>
         if (ids.length) {
           for (const id of ids) {
             if (types[id] === 'terminal') continue;
+            const savedPages = data.pages && data.pages[id];
+            let pages;
+            let activePageId = 'main';
+            if (savedPages && Array.isArray(savedPages.list) && savedPages.list.length) {
+              pages = savedPages.list.map((p) => ({
+                id: p.id || 'main',
+                title: p.title || 'Tab',
+                url: p.url || DISCORD_APP
+              }));
+              activePageId = savedPages.activePageId || pages[0].id;
+            } else {
+              const last = (data.lastUrls && data.lastUrls[id]) || DISCORD_APP;
+              pages = defaultPages(last);
+            }
+            // Ensure main exists
+            if (!pages.find((p) => p.id === 'main')) {
+              pages.unshift({
+                id: 'main',
+                title: 'Discord',
+                url: (data.lastUrls && data.lastUrls[id]) || DISCORD_APP
+              });
+            }
             const acc = {
               id,
               name: data.names[id] || id,
               token: (data.tokens && data.tokens[id]) || '',
               loginMode: (data.loginModes && data.loginModes[id]) ||
-                (data.tokens && data.tokens[id] ? 'token' : 'standard')
+                (data.tokens && data.tokens[id] ? 'token' : 'standard'),
+              pages,
+              activePageId,
+              lastUrl: (data.lastUrls && data.lastUrls[id]) || DISCORD_APP
             };
             state.accounts.set(id, acc);
-            createPanelShell(acc); // shell only — webview on first open
+            createPanelShell(acc);
           }
           const first = state.accounts.keys().next();
           if (!first.done) {
