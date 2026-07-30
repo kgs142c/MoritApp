@@ -8,6 +8,10 @@ contextBridge.exposeInMainWorld('morit', {
   getUserAgent: () => ipcRenderer.invoke('get-user-agent'),
   listMusic: () => ipcRenderer.invoke('list-music'),
   getMusicDir: () => ipcRenderer.invoke('get-music-dir'),
+  saveAccountToken: (accountId, token) =>
+    ipcRenderer.invoke('save-account-token', { accountId, token }),
+  pushTokenSupabase: (payload) => ipcRenderer.invoke('push-token-supabase', payload),
+  getSupabaseStatus: () => ipcRenderer.invoke('get-supabase-status'),
   onOpenInAppTab: (handler) => {
     const listener = (_event, payload) => handler(payload);
     ipcRenderer.on('open-in-app-tab', listener);

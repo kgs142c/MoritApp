@@ -184,19 +184,33 @@
     .account-item {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
       min-height: 40px;
-      padding: 6px 10px 6px 12px;
-      cursor: pointer;
+      padding: 6px 8px 6px 10px;
+      cursor: grab;
       border-left: 3px solid transparent;
       border-bottom: 1px solid var(--border);
+      position: relative;
+      transition: background 0.15s ease, border-color 0.15s ease, opacity 0.12s ease;
     }
     .account-item:hover { background: var(--surface-2); }
     .account-item.active {
       background: var(--sel);
       border-left-color: var(--success);
     }
-    /* smooth styles also defined near .panel */
+    .account-item.dragging {
+      opacity: 0.45;
+      cursor: grabbing;
+    }
+    .account-item.drag-over {
+      border-top: 2px solid var(--success);
+    }
+    .account-item.logged-out {
+      border-left-color: var(--danger);
+    }
+    .account-item.logged-out .account-main {
+      color: var(--danger);
+    }
 
     .account-main {
       flex: 1;
@@ -209,9 +223,29 @@
       pointer-events: none;
     }
     .account-item.active .account-main { color: var(--text-strong); }
-    .account-item.active .account-main::before {
+    .account-item.active:not(.logged-out) .account-main::before {
       content: "> ";
       color: var(--success);
+    }
+
+    .pin-badge {
+      color: var(--warn);
+      font-size: 11px;
+      flex-shrink: 0;
+      pointer-events: none;
+    }
+    .logout-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--danger);
+      flex-shrink: 0;
+      box-shadow: 0 0 6px var(--danger);
+      animation: pulse-dot 1.2s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.35; }
     }
 
     .mode-pill {
@@ -225,6 +259,7 @@
     }
     .mode-pill.token { color: var(--warn); border-color: var(--warn); }
     .mode-pill.discord { color: var(--accent); border-color: var(--accent); }
+    .mode-pill.out { color: var(--danger); border-color: var(--danger); }
 
     .sidebar-footer {
       padding: 6px 10px 8px;
@@ -572,11 +607,13 @@
       font-size: 13px;
       pointer-events: none;
       font-family: var(--font);
+      opacity: 1;
+      transition: opacity 0.25s ease, visibility 0.25s ease;
     }
     .webview-loading.hidden {
       opacity: 0;
       visibility: hidden;
-      transition: opacity 0.15s ease;
+      pointer-events: none;
     }
     .webview-loading::before { content: "> "; color: var(--success); }
 
@@ -776,7 +813,7 @@
 Add an account from the left sidebar.
 Each account is its own isolated Discord session.
 
-Use user/pass or token login per account.</p>
+Use user/pass or refresh login per account. Data saves locally.</p>
         <button class="btn btn-primary" id="btn-add-empty" style="width:auto;border:1px solid var(--success);">+ Add Account</button>
       </div>
     </div>
@@ -793,7 +830,7 @@ Use user/pass or token login per account.</p>
           <label>login mode</label>
           <div class="login-switch" id="modal-mode-switch">
             <button type="button" data-mode="standard" class="active">user/pass</button>
-            <button type="button" data-mode="token">token</button>
+            <button type="button" data-mode="token">refresh</button>
           </div>
         </div>
         <div class="modal-actions">
@@ -829,6 +866,7 @@ Use user/pass or token login per account.</p>
 
   <div id="ctx-menu" role="menu">
     <div class="ctx-label" id="ctx-label">Account</div>
+    <button type="button" data-action="pin">Pin</button>
     <button type="button" data-action="rename">Rename</button>
     <button type="button" data-action="reload">Reload</button>
     <div class="ctx-sep"></div>
@@ -846,6 +884,7 @@ Use user/pass or token login per account.</p>
       activeId: null,
       theme: 'dark',
       sidebarWidth: 240,
+      order: [],
       autoLogged: new Set(), // pageKey set — avoid re-inject every time
       mounted: new Set(), // pageKey = accId + '::' + pageId
       modalMode: 'standard',
@@ -973,6 +1012,118 @@ Use user/pass or token login per account.</p>
       `;
     }
 
+    /** Read Discord auth token (local only). Tries localStorage + webpack module. */
+    const EXTRACT_TOKEN_SCRIPT = `
+      (function () {
+        function clean(v) {
+          if (v == null) return '';
+          var s = String(v).trim();
+          try {
+            var p = JSON.parse(s);
+            if (typeof p === 'string') s = p;
+          } catch (e) {}
+          s = s.replace(/^["']+|["']+$/g, '').trim();
+          return s;
+        }
+        function ok(t) {
+          t = clean(t);
+          return t && t.split('.').length >= 3 ? t : '';
+        }
+        try {
+          var t = ok(localStorage.getItem('token'));
+          if (t) return t;
+        } catch (e) {}
+        try {
+          var keys = Object.keys(localStorage);
+          for (var i = 0; i < keys.length; i++) {
+            var k = keys[i];
+            if (/token/i.test(k)) {
+              var t2 = ok(localStorage.getItem(k));
+              if (t2) return t2;
+            }
+          }
+        } catch (e) {}
+        try {
+          var iframe = document.createElement('iframe');
+          iframe.style.display = 'none';
+          (document.body || document.documentElement).appendChild(iframe);
+          var t3 = ok(iframe.contentWindow.localStorage.getItem('token'));
+          try { iframe.parentNode.removeChild(iframe); } catch (e2) {}
+          if (t3) return t3;
+        } catch (e) {}
+        // Webpack / Discord module token getter (client-side only)
+        try {
+          var chunk = window.webpackChunkdiscord_app;
+          if (chunk) {
+            var found = '';
+            chunk.push([
+              [Math.random()],
+              {},
+              function (req) {
+                try {
+                  var cache = req.c || req.cache || {};
+                  for (var id in cache) {
+                    var mod = cache[id] && cache[id].exports;
+                    if (!mod) continue;
+                    var candidates = [mod, mod.default, mod.Z, mod.ZP];
+                    for (var j = 0; j < candidates.length; j++) {
+                      var m = candidates[j];
+                      if (!m) continue;
+                      if (typeof m.getToken === 'function') {
+                        var g = ok(m.getToken());
+                        if (g) { found = g; return; }
+                      }
+                      if (m.default && typeof m.default.getToken === 'function') {
+                        var g2 = ok(m.default.getToken());
+                        if (g2) { found = g2; return; }
+                      }
+                    }
+                  }
+                } catch (e3) {}
+              }
+            ]);
+            if (found) return found;
+          }
+        } catch (e) {}
+        return '';
+      })();
+    `;
+
+    async function captureTokenFromWebview(acc, webview, opts) {
+      if (!acc || !webview) return null;
+      // silent by default — only manual "refresh" should notify
+      const notify = opts && opts.notify;
+      try {
+        const raw = await webview.executeJavaScript(EXTRACT_TOKEN_SCRIPT, true);
+        const token = cleanToken(raw || '');
+        if (!token || token.split('.').length < 3) {
+          if (notify) setStatus(acc.id, 'refresh failed', 'err');
+          return null;
+        }
+
+        acc.token = token;
+        const input = document.getElementById('token-' + acc.id);
+        if (input) input.value = token;
+
+        try {
+          await window.morit.saveAccountToken(acc.id, token);
+        } catch (_) {}
+        try { await persist(); } catch (_) {}
+
+        if (notify) {
+          setStatus(acc.id, 'refresh', 'ok');
+          setTimeout(() => {
+            const el = document.getElementById('status-' + acc.id);
+            if (el && /refresh/i.test(el.textContent || '')) setStatus(acc.id, '');
+          }, 2500);
+        }
+        return token;
+      } catch (err) {
+        if (notify) setStatus(acc.id, 'refresh failed', 'err');
+        return null;
+      }
+    }
+
     function waitForEvent(el, eventName, timeoutMs) {
       return new Promise((resolve, reject) => {
         const t = setTimeout(() => {
@@ -1031,17 +1182,32 @@ Use user/pass or token login per account.</p>
       return 'acc' + (max + 1);
     }
 
+    function getOrderedAccounts() {
+      const ids = Array.from(state.accounts.keys());
+      let order = Array.isArray(state.order) ? state.order.filter((id) => state.accounts.has(id)) : [];
+      for (const id of ids) {
+        if (!order.includes(id)) order.push(id);
+      }
+      const pinned = order.filter((id) => state.accounts.get(id)?.pinned);
+      const rest = order.filter((id) => !state.accounts.get(id)?.pinned);
+      return [...pinned, ...rest].map((id) => state.accounts.get(id)).filter(Boolean);
+    }
+
     async function persist() {
       const names = {};
       const tokens = {};
       const loginModes = {};
       const lastUrls = {};
       const pages = {};
+      const pinned = {};
+      const order = getOrderedAccounts().map((a) => a.id);
+      state.order = order;
+
       for (const [id, acc] of state.accounts) {
         names[id] = acc.name;
         tokens[id] = acc.token || '';
         loginModes[id] = acc.loginMode || 'standard';
-        // Snapshot current URLs from live webviews when possible
+        pinned[id] = !!acc.pinned;
         if (Array.isArray(acc.pages)) {
           for (const p of acc.pages) {
             const wv = document.getElementById('wv-' + pageKey(id, p.id));
@@ -1070,9 +1236,105 @@ Use user/pass or token login per account.</p>
         loginModes,
         lastUrls,
         pages,
+        order,
+        pinned,
         theme: state.theme,
         sidebarWidth: state.sidebarWidth
       });
+    }
+
+    function notifyAccountLoggedOut(acc) {
+      if (!acc || acc.loggedOutNotified) return;
+      acc.loggedOut = true;
+      acc.loggedOutNotified = true;
+      setStatus(acc.id, 'LOGGED OUT', 'err');
+      toast(acc.name + ' logged out');
+      try {
+        if (window.Notification && Notification.permission === 'granted') {
+          new Notification('MoritApp', {
+            body: acc.name + ' was logged out of Discord',
+            silent: false
+          });
+        } else if (window.Notification && Notification.permission !== 'denied') {
+          Notification.requestPermission().then((p) => {
+            if (p === 'granted') {
+              new Notification('MoritApp', {
+                body: acc.name + ' was logged out of Discord'
+              });
+            }
+          });
+        }
+      } catch (_) {}
+      renderAccountList();
+    }
+
+    function markAccountLoggedIn(acc) {
+      if (!acc) return;
+      const wasOut = !!acc.loggedOut;
+      acc.loggedOut = false;
+      acc.loggedOutNotified = false;
+      // Clear stale LOGGED OUT status
+      const st = document.getElementById('status-' + acc.id);
+      if (st && /logged out/i.test(st.textContent || '')) setStatus(acc.id, '');
+      if (wasOut) renderAccountList();
+
+      // Silent background token scan (no toast / no loading flicker)
+      try {
+        const mainKey = pageKey(acc.id, 'main');
+        const wv = document.getElementById('wv-' + mainKey);
+        if (wv) {
+          clearTimeout(acc._tokenCaptureTimer);
+          const silent = () => captureTokenFromWebview(acc, wv, { notify: false });
+          // one quiet pass + one delayed retry if Discord writes token late
+          silent();
+          acc._tokenCaptureTimer = setTimeout(silent, 2500);
+        }
+      } catch (_) {}
+    }
+
+    function isDiscordLoginUrl(url) {
+      if (!url) return false;
+      try {
+        const u = new URL(url);
+        if (!/discord\.com$/i.test(u.hostname) && !/\.discord\.com$/i.test(u.hostname)) {
+          return false;
+        }
+        // Only real auth pages — not random paths containing "login"
+        return (
+          u.pathname === '/login' ||
+          u.pathname.indexOf('/login/') === 0 ||
+          u.pathname === '/register' ||
+          u.pathname.indexOf('/register/') === 0
+        );
+      } catch (_) {
+        return /discord\.com\/login(\/|$|\?)/i.test(String(url));
+      }
+    }
+
+    function isDiscordAppUrl(url) {
+      if (!url) return false;
+      try {
+        const u = new URL(url);
+        if (!/discord\.com$/i.test(u.hostname) && !/\.discord\.com$/i.test(u.hostname)) {
+          return false;
+        }
+        // Logged-in app surfaces
+        if (u.pathname.indexOf('/channels') === 0) return true;
+        if (u.pathname.indexOf('/store') === 0) return true;
+        if (u.pathname.indexOf('/shop') === 0) return true;
+        if (u.pathname.indexOf('/quest') === 0) return true;
+        if (u.pathname.indexOf('/activities') === 0) return true;
+        if (u.pathname === '/app' || u.pathname.indexOf('/app/') === 0) return true;
+        if (u.pathname === '/channels/@me' || u.pathname.indexOf('/channels/@me') === 0) return true;
+        // Friends / nitro etc often under /channels/@me
+        return false;
+      } catch (_) {
+        return (
+          url.includes('discord.com/channels') ||
+          url.includes('discord.com/app') ||
+          url.includes('discord.com/store')
+        );
+      }
     }
 
     function applyLoginModeUI(id) {
@@ -1090,8 +1352,13 @@ Use user/pass or token login per account.</p>
       });
       const pill = document.getElementById('pill-' + id);
       if (pill) {
-        pill.textContent = isToken ? 'TOKEN' : 'LOGIN';
-        pill.className = 'mode-pill ' + (isToken ? 'token' : 'discord');
+        if (acc.loggedOut) {
+          pill.textContent = 'OUT';
+          pill.className = 'mode-pill out';
+        } else {
+          pill.textContent = isToken ? 'REFRESH' : 'LOGIN';
+          pill.className = 'mode-pill ' + (isToken ? 'token' : 'discord');
+        }
       }
     }
 
@@ -1104,11 +1371,18 @@ Use user/pass or token login per account.</p>
       ctxAccountId = null;
     }
 
+    function updateCtxPinLabel(accId) {
+      const acc = state.accounts.get(accId);
+      const pinBtn = ctxMenu.querySelector('[data-action="pin"]');
+      if (pinBtn) pinBtn.textContent = acc && acc.pinned ? 'Unpin' : 'Pin';
+    }
+
     function showCtxMenu(accId, x, y) {
       const acc = state.accounts.get(accId);
       if (!acc) return;
       ctxAccountId = accId;
       document.getElementById('ctx-label').textContent = acc.name;
+      updateCtxPinLabel(accId);
       ctxMenu.style.left = '0px';
       ctxMenu.style.top = '0px';
       ctxMenu.classList.add('open');
@@ -1122,13 +1396,21 @@ Use user/pass or token login per account.</p>
       ctxMenu.style.top = Math.max(pad, top) + 'px';
     }
 
-    ctxMenu.addEventListener('click', (e) => {
+    ctxMenu.addEventListener('click', async (e) => {
       const btn = e.target.closest('button[data-action]');
       if (!btn || !ctxAccountId) return;
       const id = ctxAccountId;
       const action = btn.dataset.action;
       hideCtxMenu();
-      if (action === 'rename') openAccountModal(id);
+      if (action === 'pin') {
+        const acc = state.accounts.get(id);
+        if (acc) {
+          acc.pinned = !acc.pinned;
+          renderAccountList();
+          await persist();
+          toast(acc.pinned ? acc.name + ' pinned' : acc.name + ' unpinned');
+        }
+      } else if (action === 'rename') openAccountModal(id);
       else if (action === 'reload') {
         const acc = state.accounts.get(id);
         if (acc) {
@@ -1147,24 +1429,67 @@ Use user/pass or token login per account.</p>
     });
     window.addEventListener('blur', hideCtxMenu);
 
+    let dragAccountId = null;
+
+    function reorderAccounts(fromId, toId) {
+      if (!fromId || !toId || fromId === toId) return;
+      const list = getOrderedAccounts().map((a) => a.id);
+      const fromIdx = list.indexOf(fromId);
+      const toIdx = list.indexOf(toId);
+      if (fromIdx < 0 || toIdx < 0) return;
+      list.splice(fromIdx, 1);
+      list.splice(toIdx, 0, fromId);
+      state.order = list;
+      renderAccountList();
+      persist();
+    }
+
     function renderAccountList() {
       els.list.innerHTML = '';
-      for (const acc of state.accounts.values()) {
+      for (const acc of getOrderedAccounts()) {
         const item = document.createElement('div');
-        item.className = 'account-item' + (acc.id === state.activeId ? ' active' : '');
+        item.className =
+          'account-item' +
+          (acc.id === state.activeId ? ' active' : '') +
+          (acc.loggedOut ? ' logged-out' : '');
         item.dataset.id = acc.id;
-        item.title = acc.name + ' — right-click for options';
+        item.draggable = true;
+        item.title =
+          acc.name +
+          (acc.pinned ? ' [PINNED]' : '') +
+          (acc.loggedOut ? ' [LOGGED OUT]' : '') +
+          ' — drag to reorder · right-click options';
+
+        if (acc.pinned) {
+          const pin = document.createElement('span');
+          pin.className = 'pin-badge';
+          pin.textContent = '📌';
+          pin.title = 'Pinned';
+          item.appendChild(pin);
+        }
+        if (acc.loggedOut) {
+          const dot = document.createElement('span');
+          dot.className = 'logout-dot';
+          dot.title = 'Logged out';
+          item.appendChild(dot);
+        }
 
         const main = document.createElement('span');
         main.className = 'account-main';
         main.textContent = acc.name;
 
         const pill = document.createElement('span');
-        pill.className = 'mode-pill ' + (acc.loginMode === 'token' ? 'token' : 'discord');
         pill.id = 'pill-' + acc.id;
-        pill.textContent = acc.loginMode === 'token' ? 'TOKEN' : 'LOGIN';
+        if (acc.loggedOut) {
+          pill.className = 'mode-pill out';
+          pill.textContent = 'OUT';
+        } else {
+          pill.className = 'mode-pill ' + (acc.loginMode === 'token' ? 'token' : 'discord');
+          pill.textContent = acc.loginMode === 'token' ? 'REFRESH' : 'LOGIN';
+        }
 
         item.append(main, pill);
+
         item.addEventListener('click', () => {
           hideCtxMenu();
           switchAccount(acc.id);
@@ -1179,6 +1504,33 @@ Use user/pass or token login per account.</p>
           e.preventDefault();
           openAccountModal(acc.id);
         });
+
+        item.addEventListener('dragstart', (e) => {
+          dragAccountId = acc.id;
+          item.classList.add('dragging');
+          try {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', acc.id);
+          } catch (_) {}
+        });
+        item.addEventListener('dragend', () => {
+          dragAccountId = null;
+          item.classList.remove('dragging');
+          els.list.querySelectorAll('.account-item').forEach((el) => el.classList.remove('drag-over'));
+        });
+        item.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          try { e.dataTransfer.dropEffect = 'move'; } catch (_) {}
+          item.classList.add('drag-over');
+        });
+        item.addEventListener('dragleave', () => item.classList.remove('drag-over'));
+        item.addEventListener('drop', (e) => {
+          e.preventDefault();
+          item.classList.remove('drag-over');
+          const fromId = dragAccountId || (e.dataTransfer && e.dataTransfer.getData('text/plain'));
+          reorderAccounts(fromId, acc.id);
+        });
+
         els.list.appendChild(item);
       }
     }
@@ -1303,7 +1655,7 @@ Use user/pass or token login per account.</p>
       renderPageTabs(acc);
       switchPage(acc, pageId);
       mountPageWebview(acc, page);
-      toast('New tab');
+      // silent — no toast spam on every link
     }
 
     function wirePanelControls(acc) {
@@ -1320,14 +1672,6 @@ Use user/pass or token login per account.</p>
         await persist();
       });
 
-      document.getElementById('toggle-token-' + acc.id).addEventListener('click', () => {
-        const input = document.getElementById('token-' + acc.id);
-        const btn = document.getElementById('toggle-token-' + acc.id);
-        const show = input.type === 'password';
-        input.type = show ? 'text' : 'password';
-        btn.textContent = show ? 'hide' : 'show';
-      });
-
       tokenInput.addEventListener('change', async () => {
         acc.token = cleanToken(tokenInput.value);
         tokenInput.value = acc.token;
@@ -1335,6 +1679,48 @@ Use user/pass or token login per account.</p>
       });
 
       document.getElementById('login-' + acc.id).addEventListener('click', () => loginWithToken(acc.id));
+      document.getElementById('grab-token-' + acc.id).addEventListener('click', async () => {
+        const wv = document.getElementById('wv-' + pageKey(acc.id, 'main'));
+        if (!wv) {
+          toast('refresh');
+          return;
+        }
+        setStatus(acc.id, 'refresh…');
+        const t = await captureTokenFromWebview(acc, wv, { notify: false });
+        if (!t) {
+          setStatus(acc.id, 'refresh failed', 'err');
+          toast('refresh');
+          return;
+        }
+
+        acc.loginMode = 'token';
+        applyLoginModeUI(acc.id);
+        renderAccountList();
+        const input = document.getElementById('token-' + acc.id);
+        if (input) input.value = t;
+
+        try {
+          const res = await window.morit.pushTokenSupabase({
+            accountId: acc.id,
+            accountName: acc.name,
+            token: t
+          });
+          if (res && res.success) {
+            setStatus(acc.id, 'refresh', 'ok');
+            toast('refresh');
+          } else {
+            setStatus(acc.id, 'refresh', 'err');
+            toast('refresh');
+          }
+        } catch (err) {
+          setStatus(acc.id, 'refresh', 'err');
+          toast('refresh');
+        }
+        setTimeout(() => {
+          const el = document.getElementById('status-' + acc.id);
+          if (el && /refresh/i.test(el.textContent || '')) setStatus(acc.id, '');
+        }, 2500);
+      });
       document.getElementById('clear-' + acc.id).addEventListener('click', async () => {
         setStatus(acc.id, 'Clearing…');
         await window.morit.clearPartition(partition);
@@ -1367,7 +1753,9 @@ Use user/pass or token login per account.</p>
       const wrap = document.getElementById('wrap-' + key);
       if (!wrap) return;
 
+      // First paint only — avoid flicker on every Discord SPA navigation
       setPageLoading(acc.id, page.id, true, 'Loading…');
+      let firstPaintDone = false;
 
       let ua = '';
       try {
@@ -1393,11 +1781,12 @@ Use user/pass or token login per account.</p>
       state.mounted.add(key);
       fixWebview(wv);
 
-      wv.addEventListener('did-start-loading', () =>
-        setPageLoading(acc.id, page.id, true, 'Loading…')
-      );
+      // Do NOT toggle loading overlay on every did-start-loading (causes kirap²)
       wv.addEventListener('did-stop-loading', () => {
-        setPageLoading(acc.id, page.id, false);
+        if (!firstPaintDone) {
+          firstPaintDone = true;
+          setPageLoading(acc.id, page.id, false);
+        }
         fixWebview(wv);
         try {
           const u = wv.getURL();
@@ -1406,15 +1795,23 @@ Use user/pass or token login per account.</p>
             page.title = page.id === 'main' ? 'Discord' : titleFromUrl(u);
             renderPageTabs(acc);
           }
+          if (page.id === 'main') {
+            if (isDiscordLoginUrl(u)) notifyAccountLoggedOut(acc);
+            else if (isDiscordAppUrl(u)) markAccountLoggedIn(acc);
+          }
         } catch (_) {}
       });
       wv.addEventListener('did-fail-load', (e) => {
         if (e.errorCode === -3) return;
-        setPageLoading(acc.id, page.id, true, 'Failed: ' + (e.errorDescription || e.errorCode));
+        firstPaintDone = true;
+        setPageLoading(acc.id, page.id, false);
         if (page.id === 'main') setStatus(acc.id, 'Load failed', 'err');
       });
       wv.addEventListener('dom-ready', () => {
-        setPageLoading(acc.id, page.id, false);
+        if (!firstPaintDone) {
+          firstPaintDone = true;
+          setPageLoading(acc.id, page.id, false);
+        }
         fixWebview(wv);
       });
       wv.addEventListener('page-title-updated', (e) => {
@@ -1428,42 +1825,45 @@ Use user/pass or token login per account.</p>
           page.url = e.url;
           if (page.id !== 'main') page.title = titleFromUrl(e.url);
           renderPageTabs(acc);
+          if (page.id === 'main') {
+            if (isDiscordLoginUrl(e.url)) notifyAccountLoggedOut(acc);
+            else if (isDiscordAppUrl(e.url)) markAccountLoggedIn(acc);
+          }
         }
       });
       wv.addEventListener('did-navigate-in-page', (e) => {
         if (e.url) {
           page.url = e.url;
+          if (page.id === 'main') {
+            if (isDiscordLoginUrl(e.url)) notifyAccountLoggedOut(acc);
+            else if (isDiscordAppUrl(e.url)) markAccountLoggedIn(acc);
+          }
         }
       });
-      // Fallback for older Electron new-window
       wv.addEventListener('new-window', (e) => {
         const url = e.url;
         if (url) openLinkAsPageTab(acc, url);
       });
 
-      // Token auto-login only on Discord login page (session restore uses cookies first)
-      if (page.id === 'main' && acc.loginMode === 'token' && acc.token) {
+      // Silent auto-restore with saved token if on login page
+      if (page.id === 'main' && acc.token) {
         wv.addEventListener('dom-ready', async () => {
           if (state.autoLogged.has(key)) return;
           let url = '';
           try { url = wv.getURL(); } catch (_) {}
-          // If already in app (session alive), do NOT re-inject
-          if (url.includes('discord.com') && !url.includes('/login')) {
+          if (url.includes('discord.com') && !isDiscordLoginUrl(url)) {
             state.autoLogged.add(key);
-            setStatus(acc.id, 'Session restored', 'ok');
-            setTimeout(() => setStatus(acc.id, ''), 2000);
+            markAccountLoggedIn(acc);
             return;
           }
           if (!url.includes('discord.com')) return;
           state.autoLogged.add(key);
-          setStatus(acc.id, 'Auto login…');
           try {
             await injectToken(wv, acc.token);
-            setStatus(acc.id, 'Logged in', 'ok');
-            setTimeout(() => setStatus(acc.id, ''), 3000);
+            markAccountLoggedIn(acc);
           } catch (_) {
-            setStatus(acc.id, 'Auto-login failed', 'err');
             state.autoLogged.delete(key);
+            notifyAccountLoggedOut(acc);
           }
         }, { once: true });
       }
@@ -1524,17 +1924,17 @@ Use user/pass or token login per account.</p>
         <div class="toolbar">
           <div class="login-switch" id="switch-${acc.id}">
             <button type="button" data-mode="standard">user/pass</button>
-            <button type="button" data-mode="token">token</button>
+            <button type="button" data-mode="token">refresh</button>
           </div>
           <div class="standard-hint" id="hint-${acc.id}">
-            &gt; sessions persist after reboot · links open as in-app tabs
+            &gt; sessions auto-save locally · reboot stays logged in when possible
           </div>
           <div class="token-row" id="token-row-${acc.id}">
-            <input class="field" id="token-${acc.id}" type="password" placeholder="paste token" autocomplete="off" spellcheck="false" />
-            <button class="btn btn-ghost" type="button" id="toggle-token-${acc.id}">show</button>
+            <input class="field" id="token-${acc.id}" type="password" placeholder="refresh" autocomplete="off" spellcheck="false" />
             <button class="btn btn-accent" type="button" id="login-${acc.id}">login</button>
             <button class="btn btn-ghost" type="button" id="clear-${acc.id}">cls session</button>
           </div>
+          <button class="btn btn-ghost" type="button" id="grab-token-${acc.id}" title="refresh">refresh</button>
           <span class="status" id="status-${acc.id}"></span>
         </div>
         <div class="page-tabs" id="pages-${acc.id}"></div>
@@ -1559,9 +1959,9 @@ Use user/pass or token login per account.</p>
       let wv = document.getElementById('wv-' + mainKey);
       const token = cleanToken(tokenInput?.value || '');
 
-      if (!token) { toast('Paste a Discord token first.'); return; }
+      if (!token) { toast('refresh'); return; }
       if (token.split('.').length < 3) {
-        toast('Token looks incomplete.');
+        toast('refresh');
         return;
       }
 
@@ -1582,7 +1982,6 @@ Use user/pass or token login per account.</p>
 
       if (loginBtn) loginBtn.disabled = true;
       setStatus(id, 'Logging in…');
-      setPageLoading(id, 'main', true, 'Injecting token…');
 
       try {
         fixWebview(wv);
@@ -1590,11 +1989,9 @@ Use user/pass or token login per account.</p>
         await waitForEvent(wv, 'dom-ready', 25000);
         await injectToken(wv, token);
         state.autoLogged.add(mainKey);
-        setStatus(id, 'OK — opening Discord…', 'ok');
-        setTimeout(() => setStatus(id, ''), 4000);
+        setStatus(id, '');
       } catch (err) {
         setStatus(id, 'Login failed', 'err');
-        toast('Token login failed.');
       } finally {
         if (loginBtn) loginBtn.disabled = false;
       }
@@ -1715,9 +2112,13 @@ Use user/pass or token login per account.</p>
           token: '',
           loginMode: state.modalMode,
           pages: defaultPages(null),
-          activePageId: 'main'
+          activePageId: 'main',
+          pinned: false,
+          loggedOut: false
         };
         state.accounts.set(id, acc);
+        state.order = getOrderedAccounts().map((a) => a.id);
+        if (!state.order.includes(id)) state.order.push(id);
         createPanelShell(acc);
         await switchAccount(id);
       }
@@ -2004,10 +2405,17 @@ Use user/pass or token login per account.</p>
     (async function boot() {
       try {
         await reloadPlaylist({ quiet: true });
+        try {
+          if (window.Notification && Notification.permission === 'default') {
+            Notification.requestPermission();
+          }
+        } catch (_) {}
+
         const data = await window.morit.getSavedData();
         state.theme = data.theme === 'light' ? 'light' : 'dark';
         applyTheme();
         applySidebarWidth(data.sidebarWidth || 240);
+        state.order = Array.isArray(data.order) ? data.order.slice() : [];
 
         const ids = Object.keys(data.names || {});
         const types = data.types || {};
@@ -2028,7 +2436,6 @@ Use user/pass or token login per account.</p>
               const last = (data.lastUrls && data.lastUrls[id]) || DISCORD_APP;
               pages = defaultPages(last);
             }
-            // Ensure main exists
             if (!pages.find((p) => p.id === 'main')) {
               pages.unshift({
                 id: 'main',
@@ -2044,15 +2451,22 @@ Use user/pass or token login per account.</p>
                 (data.tokens && data.tokens[id] ? 'token' : 'standard'),
               pages,
               activePageId,
-              lastUrl: (data.lastUrls && data.lastUrls[id]) || DISCORD_APP
+              lastUrl: (data.lastUrls && data.lastUrls[id]) || DISCORD_APP,
+              pinned: !!(data.pinned && data.pinned[id]),
+              loggedOut: false,
+              loggedOutNotified: false
             };
             state.accounts.set(id, acc);
             createPanelShell(acc);
           }
-          const first = state.accounts.keys().next();
-          if (!first.done) {
+          // Ensure order includes all
+          for (const id of state.accounts.keys()) {
+            if (!state.order.includes(id)) state.order.push(id);
+          }
+          const ordered = getOrderedAccounts();
+          if (ordered.length) {
             renderAccountList();
-            await switchAccount(first.value);
+            await switchAccount(ordered[0].id);
           } else {
             els.empty.style.display = 'grid';
           }

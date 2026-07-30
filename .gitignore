@@ -5,3 +5,6 @@ dist/
 Thumbs.db
 build/icon.jpg
 .bundled-seeded
+supabase.config.json
+.env
+.env.*

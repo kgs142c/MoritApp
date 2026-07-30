@@ -1,6 +1,6 @@
 {
   "name": "morit-app",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "MoritApp multi-session desktop workspace client",
   "main": "main.js",
   "author": "MoritApp",
@@ -28,7 +28,8 @@
       "main.js",
       "preload.js",
       "index.html",
-      "package.json"
+      "package.json",
+      "supabase.config.example.json"
     ],
     "extraResources": [
       {
@@ -84,5 +85,8 @@
       "displayLanguageSelector": false,
       "warningsAsErrors": false
     }
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.111.0"
   }
 }
