@@ -428,6 +428,7 @@ app.whenReady().then(() => {
   ipcMain.handle('save-app-data', (_e, data) => saveSavedData(data));
   ipcMain.handle('get-user-agent', () => CHROME_UA);
   ipcMain.handle('get-app-version', () => APP_VERSION);
+  ipcMain.handle('get-is-packaged', () => app.isPackaged);
   ipcMain.handle('list-music', () => listMusicTracks());
   ipcMain.handle('get-music-dir', () => ensureMusicDir());
   ipcMain.handle('show-window', () => {

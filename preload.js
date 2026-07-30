@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('morit', {
   preparePartition: (partitionName) => ipcRenderer.invoke('prepare-partition', partitionName),
   getUserAgent: () => ipcRenderer.invoke('get-user-agent'),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  getIsPackaged: () => ipcRenderer.invoke('get-is-packaged'),
   listMusic: () => ipcRenderer.invoke('list-music'),
   getMusicDir: () => ipcRenderer.invoke('get-music-dir'),
   saveAccountToken: (accountId, token) =>

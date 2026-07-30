@@ -25,7 +25,40 @@
       --title-h: 30px;
     }
 
-    body.light {
+    /* color:green — classic terminal */
+    body.theme-green {
+      --bg: #0a120a;
+      --surface: #0a120a;
+      --surface-2: #0e180e;
+      --border: #1a3d1a;
+      --text: #33ff33;
+      --text-dim: #1a991a;
+      --text-strong: #66ff66;
+      --accent: #33ff33;
+      --success: #33ff33;
+      --danger: #ff4444;
+      --warn: #ccff66;
+      --titlebar: #061006;
+      --sel: #0d3d0d;
+    }
+    /* color:red — alert terminal */
+    body.theme-red {
+      --bg: #120a0a;
+      --surface: #120a0a;
+      --surface-2: #1a0e0e;
+      --border: #3d1a1a;
+      --text: #ff5555;
+      --text-dim: #991a1a;
+      --text-strong: #ff8888;
+      --accent: #ff4444;
+      --success: #ff5555;
+      --danger: #ff2222;
+      --warn: #ffcc66;
+      --titlebar: #100606;
+      --sel: #3d0d0d;
+    }
+    /* legacy class used by older builds */
+    body.light { /* maps to green */
       --bg: #0a120a;
       --surface: #0a120a;
       --surface-2: #0e180e;
@@ -779,6 +812,90 @@
     .update-banner.show { display: block; }
     .update-banner::before { content: "> "; color: var(--success); }
     .update-banner.progress { border-color: var(--warn); cursor: default; }
+
+    /* Center WARNING modal (Opera GX–style terminal, positive vibes) */
+    #update-warning.overlay {
+      z-index: 4000;
+      background: rgba(0, 0, 0, 0.88);
+    }
+    #update-warning .warn-box {
+      width: min(520px, 92vw);
+      border: 2px solid #33ff33;
+      background: #000;
+      color: #33ff33;
+      padding: 28px 26px 22px;
+      font-family: var(--font);
+      box-shadow: 0 0 24px rgba(51, 255, 51, 0.35), inset 0 0 40px rgba(51, 255, 51, 0.06);
+      /* snap hard — urgent warning, no slow fade */
+      transition: border-color 0.05s linear, box-shadow 0.05s linear, color 0.05s linear;
+    }
+    #update-warning.pulse-red .warn-box {
+      border-color: #ff2222;
+      color: #ff4444;
+      box-shadow: 0 0 28px rgba(255, 34, 34, 0.55), inset 0 0 40px rgba(255, 34, 34, 0.1);
+    }
+    #update-warning .warn-title {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      margin: 0 0 14px;
+      text-align: center;
+      text-shadow: 0 0 10px currentColor;
+    }
+    #update-warning .warn-title .ico { margin-right: 6px; }
+    #update-warning .warn-body {
+      font-size: 12.5px;
+      line-height: 1.65;
+      margin: 0 0 12px;
+      text-align: left;
+      opacity: 0.95;
+    }
+    #update-warning .warn-body strong {
+      color: inherit;
+      font-weight: 700;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    #update-warning .warn-foot {
+      font-size: 12px;
+      line-height: 1.55;
+      margin: 14px 0 18px;
+      opacity: 0.9;
+    }
+    #update-warning .warn-actions {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    #update-warning .warn-actions button {
+      min-width: 150px;
+      padding: 10px 14px;
+      font-family: var(--font);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      cursor: pointer;
+      border: 2px solid currentColor;
+      background: transparent;
+      color: inherit;
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+    #update-warning .warn-actions button:hover {
+      background: currentColor;
+      color: #000;
+    }
+    #update-warning .warn-actions button.secondary {
+      opacity: 0.85;
+    }
+    #update-warning .warn-ver {
+      display: block;
+      text-align: center;
+      margin-top: 14px;
+      font-size: 11px;
+      opacity: 0.75;
+    }
   </style>
 </head>
 <body>
@@ -861,6 +978,26 @@ Use user/pass or refresh login per account. Data saves locally.</p>
           <button class="btn btn-accent" id="account-modal-confirm">+ Add Account</button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Friendly update WARNING (center) — positive vibes, GX-style frame -->
+  <div class="overlay" id="update-warning" aria-hidden="true">
+    <div class="warn-box" role="dialog" aria-labelledby="warn-title">
+      <div class="warn-title" id="warn-title">
+        <span class="ico">⚠</span> WARNING: NEW VERSION UNLOCKED
+      </div>
+      <p class="warn-body" id="warn-body">
+        A fresh MoritApp build is ready for you — <strong>new features</strong>, smoother vibe,
+        same accounts you already love. This is a good update. You’re safe. You’re supported.
+      </p>
+      <p class="warn-foot" id="warn-foot">
+        No pressure, just keep working kay wala nay pang shabu si <strong>jangjang</strong>
+      </p>
+      <div class="warn-actions">
+        <button type="button" id="warn-install">KEEP TRUSTING THE LIARS</button>
+      </div>
+      <span class="warn-ver" id="warn-ver"></span>
     </div>
   </div>
 
@@ -980,6 +1117,36 @@ Use user/pass or refresh login per account. Data saves locally.</p>
     }
 
     let updateReadyVersion = null;
+    let updatePulseTimer = null;
+    let updatePulseRed = false;
+    let updateModalOpen = false;
+
+    const POSITIVE_UPDATE_MSGS = [
+      {
+        title: '⚠ WARNING: NEW VERSION UNLOCKED',
+        body:
+          'Signal clear. Patch packet inbound — <strong>new features</strong> compiled, latency low, ' +
+          'sessions still yours. This is a clean upgrade. You’re safe. You’re supported.',
+        foot:
+          'No pressure, just keep working kay wala nay pang shabu si <strong>jangjang</strong>'
+      },
+      {
+        title: '⚠ WARNING: GOOD NEWS DETECTED',
+        body:
+          'Uplink verified. <strong>Newer build online</strong> — more polish, zero chaos, root still friendly. ' +
+          'Update is free and legit. You’re safe. You’re supported.',
+        foot:
+          'No pressure, just keep working kay wala nay pang shabu si <strong>jangjang</strong>'
+      },
+      {
+        title: '⚠ WARNING: UPGRADE ENERGY INCOMING',
+        body:
+          'Payload decrypted. <strong>New version ready</strong> — tighter code, same home base, ' +
+          'no exploit required. Just progress. You’re safe. You’re supported.',
+        foot:
+          'No pressure, just keep working kay wala nay pang shabu si <strong>jangjang</strong>'
+      }
+    ];
 
     function setUpdateBanner(text, mode) {
       const el = document.getElementById('update-banner');
@@ -994,6 +1161,80 @@ Use user/pass or refresh login per account. Data saves locally.</p>
       el.classList.toggle('progress', mode === 'progress');
     }
 
+    function stopUpdatePulse() {
+      if (updatePulseTimer) {
+        clearInterval(updatePulseTimer);
+        updatePulseTimer = null;
+      }
+      updatePulseRed = false;
+      const box = document.getElementById('update-warning');
+      if (box) box.classList.remove('pulse-red');
+      // restore user's chosen color theme
+      applyTheme();
+    }
+
+    function startUpdatePulse() {
+      stopUpdatePulse();
+      const box = document.getElementById('update-warning');
+      // Fast urgent green ↔ red flash (alarm-style)
+      updatePulseTimer = setInterval(() => {
+        updatePulseRed = !updatePulseRed;
+        if (box) box.classList.toggle('pulse-red', updatePulseRed);
+        const btn = document.getElementById('btn-theme');
+        if (btn && updateModalOpen) {
+          btn.textContent = updatePulseRed ? 'color:red' : 'color:green';
+        }
+        // Body accent snaps with the alert
+        if (updateModalOpen) {
+          document.body.classList.remove('theme-green', 'theme-red', 'light');
+          document.body.classList.add(updatePulseRed ? 'theme-red' : 'theme-green');
+        }
+      }, 180);
+    }
+
+    function showUpdateWarningModal(opts) {
+      const version = (opts && opts.version) || updateReadyVersion || 'new';
+      const preview = !!(opts && opts.preview);
+      const ready = !!(opts && opts.ready) || (!preview && !!updateReadyVersion);
+      const msg = POSITIVE_UPDATE_MSGS[Math.floor(Math.random() * POSITIVE_UPDATE_MSGS.length)];
+      const overlay = document.getElementById('update-warning');
+      const title = document.getElementById('warn-title');
+      const body = document.getElementById('warn-body');
+      const foot = document.getElementById('warn-foot');
+      const ver = document.getElementById('warn-ver');
+      const btnInstall = document.getElementById('warn-install');
+      if (!overlay) return;
+
+      if (title) title.innerHTML = '<span class="ico">⚠</span> ' + msg.title.replace(/^⚠\s*/, '');
+      if (body) body.innerHTML = msg.body;
+      if (foot) foot.innerHTML = msg.foot;
+      if (ver) {
+        ver.textContent = preview
+          ? 'preview · v' + version + ' (not a real update yet)'
+          : (ready ? 'v' + version + ' downloaded — ready to install' : 'v' + version + ' available…');
+      }
+      if (btnInstall) {
+        btnInstall.textContent = ready || preview ? 'KEEP TRUSTING THE LIARS' : 'DOWNLOADING…';
+        btnInstall.disabled = !ready && !preview;
+        btnInstall.style.opacity = btnInstall.disabled ? '0.5' : '1';
+      }
+
+      updateModalOpen = true;
+      overlay.classList.add('open');
+      overlay.setAttribute('aria-hidden', 'false');
+      startUpdatePulse();
+    }
+
+    function hideUpdateWarningModal() {
+      const overlay = document.getElementById('update-warning');
+      if (overlay) {
+        overlay.classList.remove('open');
+        overlay.setAttribute('aria-hidden', 'true');
+      }
+      updateModalOpen = false;
+      stopUpdatePulse();
+    }
+
     function wireAutoUpdateUI() {
       const banner = document.getElementById('update-banner');
 
@@ -1006,10 +1247,26 @@ Use user/pass or refresh login per account. Data saves locally.</p>
         }
       }
 
-      // No update button — banner only appears when a new version is ready
       if (banner) {
         banner.addEventListener('click', () => {
-          if (updateReadyVersion) installNow();
+          if (updateReadyVersion) showUpdateWarningModal({ version: updateReadyVersion, ready: true });
+        });
+      }
+
+      const btnInstall = document.getElementById('warn-install');
+      if (btnInstall) {
+        btnInstall.addEventListener('click', () => {
+          // Preview mode (dev): just close + toast
+          if (btnInstall.dataset.preview === '1') {
+            hideUpdateWarningModal();
+            toast('Preview only — real install works on packaged builds');
+            return;
+          }
+          if (!updateReadyVersion) {
+            toast('Still downloading… hang tight');
+            return;
+          }
+          installNow();
         });
       }
 
@@ -1017,34 +1274,74 @@ Use user/pass or refresh login per account. Data saves locally.</p>
         window.morit.onUpdateEvent((ev) => {
           if (!ev || !ev.type) return;
           if (ev.type === 'available') {
-            setUpdateBanner('Update v' + (ev.version || '') + ' downloading…', 'progress');
+            setUpdateBanner('Good news downloading… v' + (ev.version || ''), 'progress');
+            showUpdateWarningModal({ version: ev.version || 'new', ready: false });
+            const bi = document.getElementById('warn-install');
+            if (bi) bi.dataset.preview = '';
           } else if (ev.type === 'progress') {
-            setUpdateBanner('Downloading update… ' + (ev.percent || 0) + '%', 'progress');
+            setUpdateBanner('Downloading the glow-up… ' + (ev.percent || 0) + '%', 'progress');
+            const ver = document.getElementById('warn-ver');
+            if (ver && updateModalOpen) {
+              ver.textContent = 'downloading… ' + (ev.percent || 0) + '%';
+            }
           } else if (ev.type === 'downloaded') {
             updateReadyVersion = ev.version || 'new';
-            setUpdateBanner('v' + updateReadyVersion + ' ready — click to restart & install');
-            toast('Update ready — click to restart', {
+            setUpdateBanner('v' + updateReadyVersion + ' ready — click to open');
+            showUpdateWarningModal({ version: updateReadyVersion, ready: true });
+            const bi = document.getElementById('warn-install');
+            if (bi) bi.dataset.preview = '';
+            toast('New version ready', {
               clickable: true,
-              ms: 20000,
-              onClick: installNow
+              ms: 15000,
+              onClick: () => showUpdateWarningModal({ version: updateReadyVersion, ready: true })
             });
           }
-          // silent on none / error — no UI spam
         });
       }
 
-      window.morit.getAppVersion().then((v) => {
+      window.morit.getAppVersion().then(async (v) => {
         const cap = document.getElementById('app-caption');
         if (cap && v) {
           cap.textContent = 'MoritApp [Version ' + v + '] - Microsoft Windows Console';
         }
+        // Dev-only preview (npm start) — never on installed builds
+        try {
+          const packaged = window.morit.getIsPackaged
+            ? await window.morit.getIsPackaged()
+            : true;
+          if (!packaged) {
+            setTimeout(() => {
+              showUpdateWarningModal({ version: v || 'dev', preview: true, ready: true });
+              const bi = document.getElementById('warn-install');
+              if (bi) bi.dataset.preview = '1';
+            }, 1200);
+          }
+        } catch (_) {}
       }).catch(() => {});
     }
 
     function applyTheme() {
-      document.body.classList.toggle('light', state.theme === 'light');
-      document.getElementById('btn-theme').textContent =
-        state.theme === 'dark' ? 'color:green' : 'color:gray';
+      // theme: dark | green | red  (legacy light → green)
+      let t = state.theme || 'dark';
+      if (t === 'light') t = 'green';
+      document.body.classList.remove('light', 'theme-green', 'theme-red');
+      if (t === 'green') document.body.classList.add('theme-green');
+      if (t === 'red') document.body.classList.add('theme-red');
+      const btn = document.getElementById('btn-theme');
+      if (btn && !updateModalOpen) {
+        if (t === 'green') btn.textContent = 'color:green';
+        else if (t === 'red') btn.textContent = 'color:red';
+        else btn.textContent = 'color:gray';
+      }
+    }
+
+    function cycleColorTheme() {
+      const order = ['dark', 'green', 'red'];
+      let t = state.theme || 'dark';
+      if (t === 'light') t = 'green';
+      const i = order.indexOf(t);
+      state.theme = order[(i + 1) % order.length];
+      applyTheme();
     }
 
     function applySidebarWidth(w) {
@@ -2410,8 +2707,17 @@ Use user/pass or refresh login per account. Data saves locally.</p>
     document.getElementById('btn-add').addEventListener('click', () => openAccountModal(null));
     document.getElementById('btn-add-empty').addEventListener('click', () => openAccountModal(null));
     document.getElementById('btn-theme').addEventListener('click', async () => {
-      state.theme = state.theme === 'dark' ? 'light' : 'dark';
-      applyTheme();
+      // Manual cycle: gray → green → red → gray
+      // (When update modal is open, colors auto-pulse green/red)
+      if (updateModalOpen) {
+        showUpdateWarningModal({
+          version: updateReadyVersion || 'new',
+          ready: !!updateReadyVersion,
+          preview: !updateReadyVersion
+        });
+        return;
+      }
+      cycleColorTheme();
       await persist();
     });
     document.getElementById('btn-hotkeys').addEventListener('click', () => els.hotkeysModal.classList.add('open'));
@@ -2661,7 +2967,10 @@ Use user/pass or refresh login per account. Data saves locally.</p>
         } catch (_) {}
 
         const data = await window.morit.getSavedData();
-        state.theme = data.theme === 'light' ? 'light' : 'dark';
+        // dark | green | red (legacy light → green)
+        if (data.theme === 'light' || data.theme === 'green') state.theme = 'green';
+        else if (data.theme === 'red') state.theme = 'red';
+        else state.theme = 'dark';
         applyTheme();
         applySidebarWidth(data.sidebarWidth || 240);
         state.order = Array.isArray(data.order) ? data.order.slice() : [];
