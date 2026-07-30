@@ -1,0 +1,81 @@
+MORITAPP END USER LICENSE AGREEMENT (EULA)
+==========================================
+Version 1.0.0
+
+IMPORTANT — PLEASE READ CAREFULLY BEFORE INSTALLING OR USING MORITAPP.
+
+By installing, copying, or otherwise using MoritApp (“the Software”), you agree to be bound by the terms of this End User License Agreement (“Agreement”). If you do not agree to these terms, do not install or use the Software.
+
+
+1. LICENSE GRANT
+----------------
+Subject to your compliance with this Agreement, you are granted a limited, non-exclusive, non-transferable, revocable license to install and use MoritApp on Windows computers that you own or control, for personal or internal business use.
+
+
+2. DESCRIPTION OF SOFTWARE
+--------------------------
+MoritApp is a multi-session desktop workspace client that provides isolated browser sessions and optional local media playback features. You are solely responsible for how you use the Software and for complying with the terms of any third-party services you access through it.
+
+
+3. ACCEPTABLE USE
+-----------------
+You agree that you will NOT use the Software to:
+  (a) Violate any applicable law or regulation;
+  (b) Infringe the rights of any third party, including intellectual property or privacy rights;
+  (c) Access accounts, systems, or data without authorization;
+  (d) Distribute malware, spam, or engage in harmful automated activity;
+  (e) Circumvent security or authentication measures of third-party platforms.
+
+You are responsible for your own account credentials, tokens, and local data stored by the Software.
+
+
+4. THIRD-PARTY SERVICES
+-----------------------
+The Software may display or embed third-party websites and services (for example, web applications). Those services are governed by their own terms of service and privacy policies. MoritApp is not affiliated with, endorsed by, or responsible for third-party platforms. You must comply with each service’s rules when using them.
+
+
+5. LOCAL DATA & PRIVACY
+-----------------------
+Session preferences and related local data may be stored on your computer. Music or media files you place in the application’s music folder remain under your control. The Software does not sell your personal data. You are responsible for securing your device and any sensitive information you store.
+
+
+6. AUTO-START
+-------------
+With your acceptance of this Agreement and completion of installation, MoritApp may be configured to start automatically when Windows starts so the application is ready for use. You may disable auto-start later via Windows Settings → Apps → Startup, or by uninstalling the Software.
+
+
+7. DESKTOP & START MENU SHORTCUTS
+---------------------------------
+The installer may create shortcuts on your Desktop and in the Start Menu for convenient access. These shortcuts do not collect data and can be removed without uninstalling the application.
+
+
+8. NO WARRANTY
+--------------
+THE SOFTWARE IS PROVIDED “AS IS” WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. YOU USE THE SOFTWARE AT YOUR OWN RISK.
+
+
+9. LIMITATION OF LIABILITY
+--------------------------
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE AUTHOR(S) AND DISTRIBUTOR(S) OF MORITAPP SHALL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES, OR ANY LOSS OF DATA, PROFITS, OR BUSINESS, ARISING FROM YOUR USE OF THE SOFTWARE.
+
+
+10. UPDATES
+-----------
+Updates may be provided from time to time. Continued use after an update may be subject to the then-current version of this Agreement.
+
+
+11. TERMINATION
+---------------
+This license terminates automatically if you breach this Agreement. Upon termination you must stop using the Software and uninstall it. Sections regarding warranty disclaimer and limitation of liability survive termination.
+
+
+12. GOVERNING LAW
+-----------------
+This Agreement shall be governed by the laws applicable in your place of residence, without regard to conflict-of-law principles.
+
+
+13. ACKNOWLEDGMENT
+------------------
+BY CLICKING “I AGREE”, INSTALLING, OR USING MORITAPP, YOU ACKNOWLEDGE THAT YOU HAVE READ THIS AGREEMENT, UNDERSTAND IT, AND AGREE TO BE BOUND BY ITS TERMS.
+
+© MoritApp. All rights reserved.
