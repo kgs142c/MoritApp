@@ -1,6 +1,6 @@
 {
   "name": "morit-app",
-  "version": "1.0.11",
+  "version": "1.0.12",
   "description": "MoritApp multi-session desktop workspace client",
   "main": "main.js",
   "author": "MoritApp",
@@ -51,6 +51,14 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "build/icon.ico",
+        "to": "icons/icon.ico"
+      },
+      {
+        "from": "build/icon.png",
+        "to": "icons/icon.png"
       }
     ],
     "win": {

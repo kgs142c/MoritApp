@@ -19,6 +19,11 @@ app.commandLine.appendSwitch('disable-features', 'Bluetooth');
 app.commandLine.appendSwitch('log-level', '3');
 app.commandLine.appendSwitch('disable-site-isolation-trials');
 
+// Windows taskbar pin identity — without this, pinned icon becomes generic/Electron
+try {
+  app.setAppUserModelId('com.moritapp.desktop');
+} catch (_) {}
+
 const CHROME_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
@@ -332,11 +337,15 @@ function listMusicTracks() {
 }
 
 function resolveAppIcon() {
+  // Packaged: icons live in resources/ (extraResources). Dev: build/
   const candidates = [
+    path.join(process.resourcesPath || '', 'icons', 'icon.ico'),
+    path.join(process.resourcesPath || '', 'icons', 'icon.png'),
+    path.join(process.resourcesPath || '', 'icon.ico'),
     path.join(__dirname, 'build', 'icon.ico'),
     path.join(__dirname, 'build', 'icon.png'),
-    path.join(process.resourcesPath || '', 'build', 'icon.ico'),
-    path.join(process.resourcesPath || '', 'icon.ico')
+    path.join(__dirname, 'icon.ico'),
+    path.join(__dirname, 'icon.png')
   ];
   for (const p of candidates) {
     try {
@@ -346,13 +355,13 @@ function resolveAppIcon() {
       }
     } catch (_) {}
   }
-  // 16x16 green square fallback
-  const size = 16;
+  // Last resort: try embedded exe icon via empty path not available — soft gray square (not green)
+  const size = 32;
   const buf = Buffer.alloc(size * size * 4);
   for (let i = 0; i < size * size; i++) {
-    buf[i * 4] = 22;
-    buf[i * 4 + 1] = 198;
-    buf[i * 4 + 2] = 12;
+    buf[i * 4] = 40;
+    buf[i * 4 + 1] = 40;
+    buf[i * 4 + 2] = 40;
     buf[i * 4 + 3] = 255;
   }
   return nativeImage.createFromBuffer(buf, { width: size, height: size });
@@ -409,7 +418,17 @@ function forceUpdateFocus(enable) {
 function createTray() {
   if (tray) return;
   const icon = resolveAppIcon();
-  tray = new Tray(icon.resize({ width: 16, height: 16 }));
+  // Prefer 16/32 native sizes for crisp tray icon
+  let trayImg = icon;
+  try {
+    const sizes = icon.getSize();
+    if (sizes && (sizes.width > 32 || sizes.height > 32)) {
+      trayImg = icon.resize({ width: 16, height: 16, quality: 'best' });
+    }
+  } catch (_) {
+    try { trayImg = icon.resize({ width: 16, height: 16 }); } catch (__) {}
+  }
+  tray = new Tray(trayImg);
   tray.setToolTip('MoritApp');
   tray.setContextMenu(
     Menu.buildFromTemplate([
@@ -433,6 +452,7 @@ function createTray() {
 
 function createWindow() {
   const startHidden = process.argv.includes('--hidden');
+  const winIcon = resolveAppIcon();
 
   mainWindow = new BrowserWindow({
     width: 1360,
@@ -443,7 +463,7 @@ function createWindow() {
     backgroundColor: '#0c0c0c',
     show: false,
     backgroundThrottling: true,
-    icon: resolveAppIcon(),
+    icon: winIcon,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -454,6 +474,12 @@ function createWindow() {
       spellcheck: false
     }
   });
+
+  try {
+    if (process.platform === 'win32' && !winIcon.isEmpty()) {
+      mainWindow.setIcon(winIcon);
+    }
+  } catch (_) {}
 
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
   mainWindow.setMenuBarVisibility(false);
