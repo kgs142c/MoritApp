@@ -88,14 +88,20 @@ function setupAutoUpdater() {
     autoUpdater.disableDifferentialDownload = true;
   } catch (_) {}
 
-  // Prefer generic feed (latest.yml via GitHub latest/download) — more reliable than API rate limits
+  // GitHub provider picks correct artifact per OS (win / mac / linux)
   try {
     autoUpdater.setFeedURL({
-      provider: 'generic',
-      url: 'https://github.com/kgs142c/MoritApp/releases/latest/download/'
+      provider: 'github',
+      owner: 'kgs142c',
+      repo: 'MoritApp'
     });
   } catch (_) {
-    // Fall back to package.json publish config (github provider)
+    try {
+      autoUpdater.setFeedURL({
+        provider: 'generic',
+        url: 'https://github.com/kgs142c/MoritApp/releases/latest/download/'
+      });
+    } catch (__) {}
   }
 
   autoUpdater.on('checking-for-update', () => {
