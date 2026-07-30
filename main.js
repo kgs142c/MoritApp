@@ -25,11 +25,41 @@ const CHROME_UA =
 const dataFilePath = path.join(app.getPath('userData'), 'morit_app_data.json');
 const APP_VERSION = app.getVersion();
 
-/** Push update events to renderer (toasts / restart button) */
+/** Last update payload — re-sent if UI missed the live event (v8→v9 bug). */
+let lastUpdateEvent = null;
+const updateEventQueue = [];
+
+/** Push update events to renderer (queue if window not ready yet) */
 function sendUpdateEvent(payload) {
+  if (!payload || !payload.type) return;
+  lastUpdateEvent = payload;
   try {
-    if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents && !mainWindow.webContents.isLoading()) {
       mainWindow.webContents.send('update-event', payload);
+      return;
+    }
+  } catch (_) {}
+  // UI not ready — queue (max 20)
+  updateEventQueue.push(payload);
+  if (updateEventQueue.length > 20) updateEventQueue.shift();
+}
+
+function flushUpdateEvents() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    while (updateEventQueue.length) {
+      const p = updateEventQueue.shift();
+      mainWindow.webContents.send('update-event', p);
+    }
+    // Always re-broadcast last important state so WARNING can open
+    if (
+      lastUpdateEvent &&
+      (lastUpdateEvent.type === 'available' ||
+        lastUpdateEvent.type === 'progress' ||
+        lastUpdateEvent.type === 'downloaded' ||
+        lastUpdateEvent.type === 'error')
+    ) {
+      mainWindow.webContents.send('update-event', lastUpdateEvent);
     }
   } catch (_) {}
 }
@@ -44,24 +74,39 @@ function setupAutoUpdater() {
     return;
   }
 
-  // Public repo — no token required to check/download releases
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.allowDowngrade = false;
-  // Don't force-exit while user is mid-session; they can restart from toast
   autoUpdater.allowPrerelease = false;
+  // Disable differential download — full NSIS is more reliable on Windows
+  try {
+    autoUpdater.disableDifferentialDownload = true;
+  } catch (_) {}
+
+  // Prefer generic feed (latest.yml via GitHub latest/download) — more reliable than API rate limits
+  try {
+    autoUpdater.setFeedURL({
+      provider: 'generic',
+      url: 'https://github.com/kgs142c/MoritApp/releases/latest/download/'
+    });
+  } catch (_) {
+    // Fall back to package.json publish config (github provider)
+  }
 
   autoUpdater.on('checking-for-update', () => {
-    sendUpdateEvent({ type: 'checking' });
+    sendUpdateEvent({ type: 'checking', version: APP_VERSION });
   });
 
   autoUpdater.on('update-available', (info) => {
     try { showMainWindow(); } catch (_) {}
     sendUpdateEvent({
       type: 'available',
-      version: info && info.version,
+      version: (info && info.version) || 'new',
       releaseName: info && info.releaseName
     });
+    // Extra flush after UI paints
+    setTimeout(flushUpdateEvents, 500);
+    setTimeout(flushUpdateEvents, 2000);
   });
 
   autoUpdater.on('update-not-available', () => {
@@ -73,7 +118,8 @@ function setupAutoUpdater() {
       type: 'progress',
       percent: Math.round((p && p.percent) || 0),
       transferred: p && p.transferred,
-      total: p && p.total
+      total: p && p.total,
+      version: lastUpdateEvent && lastUpdateEvent.version
     });
   });
 
@@ -81,25 +127,51 @@ function setupAutoUpdater() {
     try { showMainWindow(); } catch (_) {}
     sendUpdateEvent({
       type: 'downloaded',
-      version: info && info.version
+      version: (info && info.version) || (lastUpdateEvent && lastUpdateEvent.version) || 'new'
     });
+    setTimeout(flushUpdateEvents, 300);
+    setTimeout(flushUpdateEvents, 1500);
   });
 
   autoUpdater.on('error', (err) => {
-    sendUpdateEvent({
-      type: 'error',
-      message: (err && err.message) || String(err)
-    });
+    const message = (err && err.message) || String(err);
+    try {
+      fs.appendFileSync(
+        path.join(app.getPath('userData'), 'updater.log'),
+        new Date().toISOString() + ' ' + message + '\n'
+      );
+    } catch (_) {}
+    sendUpdateEvent({ type: 'error', message });
   });
 
   const check = () => {
-    autoUpdater.checkForUpdates().catch(() => {});
+    autoUpdater.checkForUpdates().catch((err) => {
+      sendUpdateEvent({
+        type: 'error',
+        message: (err && err.message) || String(err)
+      });
+    });
   };
 
-  // First check soon after launch
-  setTimeout(check, 3000);
-  // Re-check often so busy users still get the WARNING
-  setInterval(check, 30 * 60 * 1000);
+  let checksStarted = false;
+  const startChecks = () => {
+    if (checksStarted) return;
+    checksStarted = true;
+    flushUpdateEvents();
+    setTimeout(check, 1500);
+    setTimeout(check, 10000);
+    setTimeout(check, 45000);
+    setInterval(check, 15 * 60 * 1000);
+  };
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.on('did-finish-load', () => {
+      flushUpdateEvents();
+      startChecks();
+    });
+  }
+  // Fallback if load events were already past
+  setTimeout(startChecks, 5000);
 }
 
 const AUDIO_EXT = new Set(['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.webm', '.aac', '.mp4']);
@@ -350,6 +422,10 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
   mainWindow.setMenuBarVisibility(false);
 
+  mainWindow.webContents.on('did-finish-load', () => {
+    try { flushUpdateEvents(); } catch (_) {}
+  });
+
   mainWindow.once('ready-to-show', () => {
     // Discord-like: full window on launch (unless started hidden)
     try {
@@ -431,6 +507,14 @@ app.whenReady().then(() => {
   ipcMain.handle('get-user-agent', () => CHROME_UA);
   ipcMain.handle('get-app-version', () => APP_VERSION);
   ipcMain.handle('get-is-packaged', () => app.isPackaged);
+  ipcMain.handle('get-update-status', () => {
+    try { flushUpdateEvents(); } catch (_) {}
+    return {
+      version: APP_VERSION,
+      last: lastUpdateEvent,
+      packaged: app.isPackaged
+    };
+  });
   ipcMain.handle('list-music', () => listMusicTracks());
   ipcMain.handle('get-music-dir', () => ensureMusicDir());
   ipcMain.handle('show-window', () => {

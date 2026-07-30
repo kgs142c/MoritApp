@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('morit', {
   setWebviewThrottle: (webContentsId, throttle) =>
     ipcRenderer.invoke('set-webview-throttle', { webContentsId, throttle }),
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  getUpdateStatus: () => ipcRenderer.invoke('get-update-status'),
   installUpdate: () => ipcRenderer.invoke('install-update'),
   onOpenInAppTab: (handler) => {
     const listener = (_event, payload) => handler(payload);

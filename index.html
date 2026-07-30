@@ -1384,35 +1384,53 @@ Use user/pass or refresh login per account. Data saves locally.</p>
         });
       }
 
-      if (window.morit.onUpdateEvent) {
-        window.morit.onUpdateEvent((ev) => {
-          if (!ev || !ev.type) return;
-          if (ev.type === 'available') {
-            updatePendingVersion = ev.version || 'new';
-            setUpdateBanner('Update v' + updatePendingVersion + ' downloading…', 'progress');
-            showUpdateWarningModal({ version: updatePendingVersion, ready: false });
-            const bi = document.getElementById('warn-install');
-            if (bi) bi.dataset.preview = '';
-          } else if (ev.type === 'progress') {
-            setUpdateBanner('Downloading… ' + (ev.percent || 0) + '%', 'progress');
-            const ver = document.getElementById('warn-ver');
-            if (ver && updateModalOpen) {
-              ver.textContent = 'downloading… ' + (ev.percent || 0) + '%';
-            }
-            // Keep modal up during long Discord sessions
-            if (!updateModalOpen && updatePendingVersion) {
-              showUpdateWarningModal({ version: updatePendingVersion, ready: false, keepCopy: true });
-            }
-          } else if (ev.type === 'downloaded') {
-            updateReadyVersion = ev.version || updatePendingVersion || 'new';
-            updatePendingVersion = updateReadyVersion;
-            setUpdateBanner('v' + updateReadyVersion + ' ready');
-            showUpdateWarningModal({ version: updateReadyVersion, ready: true });
-            const bi = document.getElementById('warn-install');
-            if (bi) bi.dataset.preview = '';
+      function handleUpdateEvent(ev) {
+        if (!ev || !ev.type) return;
+        if (ev.type === 'available') {
+          updatePendingVersion = ev.version || 'new';
+          setUpdateBanner('Update v' + updatePendingVersion + ' downloading…', 'progress');
+          showUpdateWarningModal({ version: updatePendingVersion, ready: false });
+          const bi = document.getElementById('warn-install');
+          if (bi) bi.dataset.preview = '';
+        } else if (ev.type === 'progress') {
+          if (ev.version) updatePendingVersion = ev.version;
+          setUpdateBanner('Downloading… ' + (ev.percent || 0) + '%', 'progress');
+          const ver = document.getElementById('warn-ver');
+          if (ver && updateModalOpen) {
+            ver.textContent = 'downloading… ' + (ev.percent || 0) + '%';
           }
-        });
+          if (!updateModalOpen && updatePendingVersion) {
+            showUpdateWarningModal({ version: updatePendingVersion, ready: false, keepCopy: true });
+          }
+        } else if (ev.type === 'downloaded') {
+          updateReadyVersion = ev.version || updatePendingVersion || 'new';
+          updatePendingVersion = updateReadyVersion;
+          setUpdateBanner('v' + updateReadyVersion + ' ready');
+          showUpdateWarningModal({ version: updateReadyVersion, ready: true });
+          const bi = document.getElementById('warn-install');
+          if (bi) bi.dataset.preview = '';
+        } else if (ev.type === 'error') {
+          // Surface updater failures (silent before → missed WARNING)
+          setUpdateBanner('update check: ' + String(ev.message || 'error').slice(0, 80));
+        }
       }
+
+      if (window.morit.onUpdateEvent) {
+        window.morit.onUpdateEvent(handleUpdateEvent);
+      }
+
+      // Recover state if main process already found an update before UI listened
+      async function syncUpdateStatus() {
+        try {
+          if (!window.morit.getUpdateStatus) return;
+          const st = await window.morit.getUpdateStatus();
+          if (st && st.last) handleUpdateEvent(st.last);
+        } catch (_) {}
+      }
+      syncUpdateStatus();
+      setTimeout(syncUpdateStatus, 3000);
+      setTimeout(syncUpdateStatus, 12000);
+      setInterval(syncUpdateStatus, 60000);
 
       // If user alt-tabs back, force WARNING again
       document.addEventListener('visibilitychange', () => {
@@ -1423,6 +1441,7 @@ Use user/pass or refresh login per account. Data saves locally.</p>
             keepCopy: true
           });
         }
+        if (document.visibilityState === 'visible') syncUpdateStatus();
       });
       window.addEventListener('focus', () => {
         if (updatePendingVersion || updateReadyVersion) {
@@ -1432,6 +1451,7 @@ Use user/pass or refresh login per account. Data saves locally.</p>
             keepCopy: true
           });
         }
+        syncUpdateStatus();
       });
 
       window.morit.getAppVersion().then(async (v) => {
@@ -1450,6 +1470,10 @@ Use user/pass or refresh login per account. Data saves locally.</p>
               const bi = document.getElementById('warn-install');
               if (bi) bi.dataset.preview = '1';
             }, 1200);
+          } else {
+            // Packaged: actively ask main for updates + flush
+            try { await window.morit.checkForUpdates(); } catch (_) {}
+            syncUpdateStatus();
           }
         } catch (_) {}
       }).catch(() => {});
