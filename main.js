@@ -28,16 +28,63 @@ const CHROME_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 const dataFilePath = path.join(app.getPath('userData'), 'morit_app_data.json');
+const updateReadyMarkerPath = () => path.join(app.getPath('userData'), 'update-ready.json');
 const APP_VERSION = app.getVersion();
 
 /** Last update payload — re-sent if UI missed the live event (v8→v9 bug). */
 let lastUpdateEvent = null;
 const updateEventQueue = [];
 
+function saveUpdateReadyMarker(payload) {
+  try {
+    if (!payload || (payload.type !== 'downloaded' && payload.type !== 'available')) return;
+    fs.writeFileSync(
+      updateReadyMarkerPath(),
+      JSON.stringify({
+        type: payload.type,
+        version: payload.version || 'new',
+        at: new Date().toISOString()
+      }),
+      'utf8'
+    );
+  } catch (_) {}
+}
+
+function clearUpdateReadyMarker() {
+  try {
+    if (fs.existsSync(updateReadyMarkerPath())) fs.unlinkSync(updateReadyMarkerPath());
+  } catch (_) {}
+}
+
+function loadUpdateReadyMarker() {
+  try {
+    if (!fs.existsSync(updateReadyMarkerPath())) return null;
+    const raw = JSON.parse(fs.readFileSync(updateReadyMarkerPath(), 'utf8'));
+    if (!raw || !raw.version) return null;
+    // Stale marker for already-installed version
+    if (String(raw.version) === String(APP_VERSION)) {
+      clearUpdateReadyMarker();
+      return null;
+    }
+    return {
+      type: raw.type === 'available' ? 'available' : 'downloaded',
+      version: raw.version
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
 /** Push update events to renderer (queue if window not ready yet) */
 function sendUpdateEvent(payload) {
   if (!payload || !payload.type) return;
   lastUpdateEvent = payload;
+  if (payload.type === 'downloaded' || payload.type === 'available') {
+    saveUpdateReadyMarker(payload);
+  }
+  if (payload.type === 'none') {
+    clearUpdateReadyMarker();
+  }
   try {
     if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents && !mainWindow.webContents.isLoading()) {
       mainWindow.webContents.send('update-event', payload);
@@ -167,13 +214,28 @@ function setupAutoUpdater() {
     });
   };
 
+  // If a previous session downloaded an update but UI never showed WARNING, restore it now
+  try {
+    const saved = loadUpdateReadyMarker();
+    if (saved) {
+      sendUpdateEvent(saved);
+      try { forceUpdateFocus(true); } catch (_) {}
+    }
+  } catch (_) {}
+
   let checksStarted = false;
   const startChecks = () => {
     if (checksStarted) return;
     checksStarted = true;
     flushUpdateEvents();
-    setTimeout(check, 1500);
-    setTimeout(check, 10000);
+    // Restore marker again after UI is up
+    try {
+      const saved = loadUpdateReadyMarker();
+      if (saved) sendUpdateEvent(saved);
+    } catch (_) {}
+    setTimeout(check, 800);
+    setTimeout(check, 4000);
+    setTimeout(check, 12000);
     setTimeout(check, 45000);
     setInterval(check, 15 * 60 * 1000);
   };
@@ -185,7 +247,7 @@ function setupAutoUpdater() {
     });
   }
   // Fallback if load events were already past
-  setTimeout(startChecks, 5000);
+  setTimeout(startChecks, 3000);
 }
 
 const AUDIO_EXT = new Set(['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.webm', '.aac', '.mp4']);
@@ -610,7 +672,8 @@ app.whenReady().then(() => {
     if (!app.isPackaged) return { success: false };
     try {
       isQuitting = true;
-      // true = silent install, true = force run after, true = start elevated if needed
+      clearUpdateReadyMarker();
+      // false = not silent (NSIS needs to run), true = force run app after
       autoUpdater.quitAndInstall(false, true);
       return { success: true };
     } catch (err) {
