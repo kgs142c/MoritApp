@@ -850,8 +850,8 @@
 
     /* Center WARNING modal (Opera GX–style terminal, positive vibes) */
     #update-warning.overlay {
-      z-index: 4000;
-      background: rgba(0, 0, 0, 0.88);
+      z-index: 2147483646;
+      background: rgba(0, 0, 0, 0.92);
     }
     #update-warning .warn-box {
       width: min(520px, 92vw);
@@ -931,17 +931,34 @@
       font-size: 11px;
       opacity: 0.75;
     }
-    /* While update WARNING is up, block interaction with the rest of the app */
+    /* While update WARNING is up: block app + HIDE webviews.
+       Electron <webview> paints ABOVE normal HTML — without this, Discord
+       covers the WARNING while the user is busy chatting. */
     body.update-lock #sidebar,
     body.update-lock #content,
     body.update-lock #resizer,
     body.update-lock .app-titlebar {
       pointer-events: none !important;
-      filter: brightness(0.45);
+      filter: brightness(0.35);
+    }
+    body.update-lock webview,
+    body.update-lock .webview-host,
+    body.update-lock .webview-wrap,
+    body.update-lock .page-view {
+      visibility: hidden !important;
+      pointer-events: none !important;
+      opacity: 0 !important;
     }
     body.update-lock #update-warning {
+      display: flex !important;
       pointer-events: auto !important;
       filter: none !important;
+      z-index: 2147483646 !important;
+    }
+    body.update-lock #update-warning .warn-box {
+      pointer-events: auto !important;
+      position: relative;
+      z-index: 2147483647;
     }
   </style>
 </head>
@@ -1293,8 +1310,14 @@ Use user/pass or refresh login per account. Data saves locally.</p>
       updateModalOpen = true;
       overlay.classList.add('open');
       overlay.setAttribute('aria-hidden', 'false');
-      // Hard block rest of UI while update is up
+      // Hard block rest of UI + hide Discord webviews so WARNING is visible while busy
       document.body.classList.add('update-lock');
+      // Pull OS window in front even if user is deep in Discord / other apps
+      try {
+        if (window.morit && window.morit.forceUpdateFocus) {
+          window.morit.forceUpdateFocus(true);
+        }
+      } catch (_) {}
       startUpdatePulse();
       startForceUpdateNag();
     }
@@ -1316,30 +1339,31 @@ Use user/pass or refresh login per account. Data saves locally.</p>
       }
       updateModalOpen = false;
       document.body.classList.remove('update-lock');
+      try {
+        if (window.morit && window.morit.forceUpdateFocus) {
+          window.morit.forceUpdateFocus(false);
+        }
+      } catch (_) {}
       stopUpdatePulse();
       if (force) stopForceUpdateNag();
     }
 
     function startForceUpdateNag() {
       if (updateForceTimer) return;
-      // Re-open / keep on top even if user is busy in Discord
+      // Keep forcing WARNING while update exists — even if user is mid-Discord
       updateForceTimer = setInterval(() => {
         if (!updatePendingVersion && !updateReadyVersion) return;
-        if (!updateModalOpen) {
-          showUpdateWarningModal({
-            version: updateReadyVersion || updatePendingVersion,
-            ready: !!updateReadyVersion,
-            keepCopy: false
-          });
-        } else {
-          // Ensure overlay stays open + focused
-          const overlay = document.getElementById('update-warning');
-          if (overlay && !overlay.classList.contains('open')) {
-            overlay.classList.add('open');
-            document.body.classList.add('update-lock');
+        showUpdateWarningModal({
+          version: updateReadyVersion || updatePendingVersion,
+          ready: !!updateReadyVersion,
+          keepCopy: true
+        });
+        try {
+          if (window.morit && window.morit.forceUpdateFocus) {
+            window.morit.forceUpdateFocus(true);
           }
-        }
-      }, 4000);
+        } catch (_) {}
+      }, 2500);
     }
 
     function stopForceUpdateNag() {

@@ -98,15 +98,16 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on('update-available', (info) => {
-    try { showMainWindow(); } catch (_) {}
+    try { forceUpdateFocus(true); } catch (_) {}
     sendUpdateEvent({
       type: 'available',
       version: (info && info.version) || 'new',
       releaseName: info && info.releaseName
     });
-    // Extra flush after UI paints
-    setTimeout(flushUpdateEvents, 500);
-    setTimeout(flushUpdateEvents, 2000);
+    // Extra flush after UI paints (busy Discord / late listeners)
+    setTimeout(flushUpdateEvents, 300);
+    setTimeout(flushUpdateEvents, 1000);
+    setTimeout(flushUpdateEvents, 3000);
   });
 
   autoUpdater.on('update-not-available', () => {
@@ -124,13 +125,14 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on('update-downloaded', (info) => {
-    try { showMainWindow(); } catch (_) {}
+    try { forceUpdateFocus(true); } catch (_) {}
     sendUpdateEvent({
       type: 'downloaded',
       version: (info && info.version) || (lastUpdateEvent && lastUpdateEvent.version) || 'new'
     });
     setTimeout(flushUpdateEvents, 300);
-    setTimeout(flushUpdateEvents, 1500);
+    setTimeout(flushUpdateEvents, 1000);
+    setTimeout(flushUpdateEvents, 3000);
   });
 
   autoUpdater.on('error', (err) => {
@@ -370,6 +372,40 @@ function showMainWindow() {
   mainWindow.focus();
 }
 
+/** Bring app to front for forced update WARNING (user may be busy in Discord). */
+function forceUpdateFocus(enable) {
+  try {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      if (enable) createWindow();
+      return { success: false };
+    }
+    if (enable) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.setSkipTaskbar(false);
+      // Keep update checks / UI responsive even while "busy" in Discord
+      try { mainWindow.webContents.setBackgroundThrottling(false); } catch (_) {}
+      mainWindow.show();
+      mainWindow.moveTop();
+      // Temporary always-on-top so WARNING is not buried under other apps
+      mainWindow.setAlwaysOnTop(true, 'screen-saver');
+      mainWindow.focus();
+      mainWindow.flashFrame(true);
+      setTimeout(() => {
+        try {
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.flashFrame(false);
+        } catch (_) {}
+      }, 4000);
+    } else {
+      try { mainWindow.setAlwaysOnTop(false); } catch (_) {}
+      try { mainWindow.flashFrame(false); } catch (_) {}
+      try { mainWindow.webContents.setBackgroundThrottling(true); } catch (_) {}
+    }
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
 function createTray() {
   if (tray) return;
   const icon = resolveAppIcon();
@@ -515,6 +551,7 @@ app.whenReady().then(() => {
       packaged: app.isPackaged
     };
   });
+  ipcMain.handle('force-update-focus', (_e, enable) => forceUpdateFocus(!!enable));
   ipcMain.handle('list-music', () => listMusicTracks());
   ipcMain.handle('get-music-dir', () => ensureMusicDir());
   ipcMain.handle('show-window', () => {
