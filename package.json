@@ -1,15 +1,20 @@
 {
   "name": "morit-app",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "MoritApp multi-session desktop workspace client",
   "main": "main.js",
   "author": "MoritApp",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kgs142c/MoritApp.git"
+  },
   "scripts": {
     "start": "electron .",
     "build": "electron-builder --win --mac",
-    "build:win": "electron-builder --win",
-    "build:mac": "electron-builder --mac"
+    "build:win": "electron-builder --win --publish never",
+    "build:mac": "electron-builder --mac --publish never",
+    "release:win": "electron-builder --win --publish never"
   },
   "devDependencies": {
     "electron": "^33.2.0",
@@ -24,6 +29,14 @@
       "output": "dist",
       "buildResources": "build"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "kgs142c",
+        "repo": "MoritApp",
+        "releaseType": "release"
+      }
+    ],
     "files": [
       "main.js",
       "preload.js",
@@ -87,6 +100,7 @@
     }
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.111.0"
+    "@supabase/supabase-js": "^2.111.0",
+    "electron-updater": "^6.8.9"
   }
 }

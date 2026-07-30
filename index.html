@@ -759,12 +759,32 @@
     }
     .toast::before { content: "> "; color: var(--success); }
     .toast.show { opacity: 1; }
+    .toast.clickable {
+      pointer-events: auto;
+      cursor: pointer;
+      border-color: var(--warn);
+    }
+    .update-banner {
+      display: none;
+      margin: 6px 8px 0;
+      padding: 8px 10px;
+      border: 1px solid var(--success);
+      background: var(--surface-2);
+      color: var(--text-strong);
+      font-size: 11px;
+      line-height: 1.35;
+      cursor: pointer;
+      font-family: var(--font);
+    }
+    .update-banner.show { display: block; }
+    .update-banner::before { content: "> "; color: var(--success); }
+    .update-banner.progress { border-color: var(--warn); cursor: default; }
   </style>
 </head>
 <body>
   <div class="app-titlebar">
     <span class="icon"></span>
-    <span class="caption">MoritApp [Version 1.0.0] - Microsoft Windows Console</span>
+    <span class="caption" id="app-caption">MoritApp [Version …] - Microsoft Windows Console</span>
   </div>
 
   <aside id="sidebar">
@@ -773,8 +793,10 @@
       <div class="sidebar-tools">
         <button class="btn btn-ghost" id="btn-theme">color</button>
         <button class="btn btn-ghost" id="btn-hotkeys">help</button>
+        <button class="btn btn-ghost" id="btn-update" title="Check for updates">update</button>
       </div>
     </div>
+    <div class="update-banner" id="update-banner" role="button" tabindex="0"></div>
     <div class="list-header">accounts</div>
     <div id="account-list"></div>
     <div class="sidebar-footer">right-click to rename</div>
@@ -855,6 +877,7 @@ Use user/pass or refresh login per account. Data saves locally.</p>
           <li><b>Ctrl + Tab</b> — next account</li>
           <li><b>Alt + Left/Right</b> — back / forward</li>
           <li><b>Ctrl + R</b> — reload active account</li>
+          <li><b>update</b> (sidebar) — check for new app version (auto from GitHub)</li>
           <li><b>color</b> — gray CMD ↔ green text</li>
         </ul>
         <div class="modal-actions">
@@ -935,11 +958,98 @@ Use user/pass or refresh login per account. Data saves locally.</p>
       confirmBtn: document.getElementById('account-modal-confirm')
     };
 
-    function toast(msg) {
+    function toast(msg, opts) {
       els.toast.textContent = msg;
       els.toast.classList.add('show');
+      els.toast.classList.toggle('clickable', !!(opts && opts.clickable));
+      if (opts && opts.onClick) {
+        els.toast.onclick = () => {
+          opts.onClick();
+          els.toast.classList.remove('show');
+          els.toast.onclick = null;
+        };
+      } else {
+        els.toast.onclick = null;
+      }
       clearTimeout(toast._t);
-      toast._t = setTimeout(() => els.toast.classList.remove('show'), 2200);
+      const ms = (opts && opts.ms) || (opts && opts.clickable ? 12000 : 2200);
+      toast._t = setTimeout(() => {
+        els.toast.classList.remove('show');
+        els.toast.classList.remove('clickable');
+        els.toast.onclick = null;
+      }, ms);
+    }
+
+    let updateReadyVersion = null;
+
+    function setUpdateBanner(text, mode) {
+      const el = document.getElementById('update-banner');
+      if (!el) return;
+      if (!text) {
+        el.classList.remove('show', 'progress');
+        el.textContent = '';
+        return;
+      }
+      el.textContent = text;
+      el.classList.add('show');
+      el.classList.toggle('progress', mode === 'progress');
+    }
+
+    function wireAutoUpdateUI() {
+      const banner = document.getElementById('update-banner');
+      const btn = document.getElementById('btn-update');
+
+      async function installNow() {
+        toast('Installing update…');
+        try {
+          await window.morit.installUpdate();
+        } catch (_) {
+          toast('Restart the app to finish update');
+        }
+      }
+
+      if (banner) {
+        banner.addEventListener('click', () => {
+          if (updateReadyVersion) installNow();
+        });
+      }
+      if (btn) {
+        btn.addEventListener('click', async () => {
+          toast('Checking updates…');
+          const res = await window.morit.checkForUpdates();
+          if (res && res.error) toast(res.error);
+        });
+      }
+
+      if (window.morit.onUpdateEvent) {
+        window.morit.onUpdateEvent((ev) => {
+          if (!ev || !ev.type) return;
+          if (ev.type === 'available') {
+            setUpdateBanner('Update ' + (ev.version || '') + ' downloading…', 'progress');
+            toast('Update available: v' + (ev.version || ''), { ms: 4000 });
+          } else if (ev.type === 'progress') {
+            setUpdateBanner('Downloading update… ' + (ev.percent || 0) + '%', 'progress');
+          } else if (ev.type === 'downloaded') {
+            updateReadyVersion = ev.version || 'new';
+            setUpdateBanner('v' + updateReadyVersion + ' ready — click to restart & install');
+            toast('Update ready — click to restart', {
+              clickable: true,
+              ms: 20000,
+              onClick: installNow
+            });
+          } else if (ev.type === 'none') {
+            // quiet unless user clicked check
+          } else if (ev.type === 'error') {
+            // keep quiet on background failures (unsigned/network)
+          }
+        });
+      }
+
+      // Titlebar version
+      window.morit.getAppVersion().then((v) => {
+        const cap = document.getElementById('app-caption');
+        if (cap && v) cap.textContent = 'MoritApp [Version ' + v + '] - Microsoft Windows Console';
+      }).catch(() => {});
     }
 
     function applyTheme() {
@@ -2317,6 +2427,7 @@ Use user/pass or refresh login per account. Data saves locally.</p>
     });
     document.getElementById('btn-hotkeys').addEventListener('click', () => els.hotkeysModal.classList.add('open'));
     document.getElementById('hotkeys-close').addEventListener('click', () => els.hotkeysModal.classList.remove('open'));
+    wireAutoUpdateUI();
     document.getElementById('account-modal-cancel').addEventListener('click', closeAccountModal);
     document.getElementById('account-modal-confirm').addEventListener('click', confirmAccountModal);
     els.nameInput.addEventListener('keydown', (e) => {

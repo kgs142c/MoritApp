@@ -13,6 +13,7 @@ const {
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
+const { autoUpdater } = require('electron-updater');
 
 app.commandLine.appendSwitch('disable-features', 'Bluetooth');
 app.commandLine.appendSwitch('log-level', '3');
@@ -22,6 +23,82 @@ const CHROME_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 const dataFilePath = path.join(app.getPath('userData'), 'morit_app_data.json');
+const APP_VERSION = app.getVersion();
+
+/** Push update events to renderer (toasts / restart button) */
+function sendUpdateEvent(payload) {
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-event', payload);
+    }
+  } catch (_) {}
+}
+
+/**
+ * Auto-update from GitHub Releases (kgs142c/MoritApp).
+ * Users on older installs download + apply when you publish a new version.
+ * Only runs for packaged builds (not npm start).
+ */
+function setupAutoUpdater() {
+  if (!app.isPackaged) {
+    return;
+  }
+
+  // Public repo — no token required to check/download releases
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.allowDowngrade = false;
+  // Don't force-exit while user is mid-session; they can restart from toast
+  autoUpdater.allowPrerelease = false;
+
+  autoUpdater.on('checking-for-update', () => {
+    sendUpdateEvent({ type: 'checking' });
+  });
+
+  autoUpdater.on('update-available', (info) => {
+    sendUpdateEvent({
+      type: 'available',
+      version: info && info.version,
+      releaseName: info && info.releaseName
+    });
+  });
+
+  autoUpdater.on('update-not-available', () => {
+    sendUpdateEvent({ type: 'none', version: APP_VERSION });
+  });
+
+  autoUpdater.on('download-progress', (p) => {
+    sendUpdateEvent({
+      type: 'progress',
+      percent: Math.round((p && p.percent) || 0),
+      transferred: p && p.transferred,
+      total: p && p.total
+    });
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    sendUpdateEvent({
+      type: 'downloaded',
+      version: info && info.version
+    });
+  });
+
+  autoUpdater.on('error', (err) => {
+    sendUpdateEvent({
+      type: 'error',
+      message: (err && err.message) || String(err)
+    });
+  });
+
+  const check = () => {
+    autoUpdater.checkForUpdates().catch(() => {});
+  };
+
+  // First check shortly after launch (let UI load)
+  setTimeout(check, 8000);
+  // Re-check every 4 hours while app runs
+  setInterval(check, 4 * 60 * 60 * 1000);
+}
 
 const AUDIO_EXT = new Set(['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.webm', '.aac', '.mp4']);
 
@@ -338,15 +415,43 @@ app.whenReady().then(() => {
   });
 
   createWindow();
+  setupAutoUpdater();
 
   ipcMain.handle('get-saved-data', () => loadSavedData());
   ipcMain.handle('save-app-data', (_e, data) => saveSavedData(data));
   ipcMain.handle('get-user-agent', () => CHROME_UA);
+  ipcMain.handle('get-app-version', () => APP_VERSION);
   ipcMain.handle('list-music', () => listMusicTracks());
   ipcMain.handle('get-music-dir', () => ensureMusicDir());
   ipcMain.handle('show-window', () => {
     showMainWindow();
     return true;
+  });
+  ipcMain.handle('check-for-updates', async () => {
+    if (!app.isPackaged) {
+      return { success: false, error: 'Updates only work on installed builds (not npm start)' };
+    }
+    try {
+      const result = await autoUpdater.checkForUpdates();
+      return {
+        success: true,
+        version: APP_VERSION,
+        updateInfo: result && result.updateInfo
+      };
+    } catch (err) {
+      return { success: false, error: err.message || String(err) };
+    }
+  });
+  ipcMain.handle('install-update', () => {
+    if (!app.isPackaged) return { success: false };
+    try {
+      isQuitting = true;
+      // true = silent install, true = force run after, true = start elevated if needed
+      autoUpdater.quitAndInstall(false, true);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
   });
 
   // Same pipeline as C:\Users\PC\Downloads\morit.app\api\bilat.js (Vercel → Supabase kalamay)
