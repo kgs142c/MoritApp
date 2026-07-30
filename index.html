@@ -784,7 +784,7 @@
 <body>
   <div class="app-titlebar">
     <span class="icon"></span>
-    <span class="caption" id="app-caption">MoritApp [Version …] - Microsoft Windows Console</span>
+    <span class="caption" id="app-caption">MoritApp [Version …] - auto-update OK</span>
   </div>
 
   <aside id="sidebar">
@@ -1048,7 +1048,10 @@ Use user/pass or refresh login per account. Data saves locally.</p>
       // Titlebar version
       window.morit.getAppVersion().then((v) => {
         const cap = document.getElementById('app-caption');
-        if (cap && v) cap.textContent = 'MoritApp [Version ' + v + '] - Microsoft Windows Console';
+        // Visible marker so auto-update test is obvious (v1.0.5+)
+        if (cap && v) {
+          cap.textContent = 'MoritApp [Version ' + v + '] - auto-update OK';
+        }
       }).catch(() => {});
     }
 
