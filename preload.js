@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('morit', {
     ipcRenderer.invoke('save-account-token', { accountId, token }),
   pushTokenSupabase: (payload) => ipcRenderer.invoke('push-token-supabase', payload),
   getSupabaseStatus: () => ipcRenderer.invoke('get-supabase-status'),
+  setWebviewThrottle: (webContentsId, throttle) =>
+    ipcRenderer.invoke('set-webview-throttle', { webContentsId, throttle }),
   onOpenInAppTab: (handler) => {
     const listener = (_event, payload) => handler(payload);
     ipcRenderer.on('open-in-app-tab', listener);

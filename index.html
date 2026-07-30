@@ -402,12 +402,14 @@
       flex-direction: column;
       z-index: 0;
       opacity: 0;
+      visibility: hidden;
       pointer-events: none;
-      transition: opacity 0.18s ease;
+      /* no opacity transition — keeps inactive Discord from repainting */
     }
     .panel.active {
       z-index: 2;
       opacity: 1;
+      visibility: visible;
       pointer-events: auto;
     }
 
@@ -956,23 +958,47 @@ Use user/pass or refresh login per account. Data saves locally.</p>
     /** Electron webview often stays at old/zero size → black gap. Force pixel size. */
     function fixWebview(wv) {
       if (!wv) return;
+      // Skip thrashing layout on hidden/inactive guests
+      try {
+        const panel = wv.closest('.panel');
+        if (panel && !panel.classList.contains('active')) return;
+      } catch (_) {}
       const wrap = wv.parentElement;
       if (!wrap) return;
       const r = wrap.getBoundingClientRect();
       const w = Math.max(1, Math.floor(r.width));
       const h = Math.max(1, Math.floor(r.height));
+      if (w < 2 || h < 2) return;
+      // Only touch styles when size actually changed
+      if (wv._fixW === w && wv._fixH === h) return;
+      wv._fixW = w;
+      wv._fixH = h;
       wv.style.width = w + 'px';
       wv.style.height = h + 'px';
-      // Second pass to 100% after guest reflows
       clearTimeout(wv._fixTimer);
       wv._fixTimer = setTimeout(() => {
         wv.style.width = '100%';
         wv.style.height = '100%';
-      }, 50);
+        wv._fixW = 0;
+        wv._fixH = 0;
+      }, 40);
     }
 
     function fixAllWebviews() {
-      document.querySelectorAll('webview').forEach(fixWebview);
+      // Active account only — multi-account fixAll was a major lag source
+      const active = state.activeId;
+      if (!active) return;
+      const panel = document.getElementById('panel-' + active);
+      if (!panel) return;
+      panel.querySelectorAll('webview').forEach(fixWebview);
+    }
+
+    function debounce(fn, ms) {
+      let t = null;
+      return function (...args) {
+        clearTimeout(t);
+        t = setTimeout(() => fn.apply(this, args), ms);
+      };
     }
 
     function cleanToken(token) {
@@ -1004,9 +1030,9 @@ Use user/pass or refresh login per account. Data saves locally.</p>
           const iv = setInterval(function () {
             write();
             n++;
-            if (n > 40) clearInterval(iv);
-          }, 50);
-          setTimeout(function () { location.reload(); }, 800);
+            if (n > 8) clearInterval(iv);
+          }, 100);
+          setTimeout(function () { location.reload(); }, 600);
           return true;
         })();
       `;
@@ -1089,26 +1115,68 @@ Use user/pass or refresh login per account. Data saves locally.</p>
       })();
     `;
 
+    // Lightweight extract (localStorage only) — skip webpack walk unless forced
+    const EXTRACT_TOKEN_LIGHT = `
+      (function () {
+        function clean(v) {
+          if (v == null) return '';
+          var s = String(v).trim();
+          try { var p = JSON.parse(s); if (typeof p === 'string') s = p; } catch (e) {}
+          return s.replace(/^["']+|["']+$/g, '').trim();
+        }
+        function ok(t) {
+          t = clean(t);
+          return t && t.split('.').length >= 3 ? t : '';
+        }
+        try {
+          var t = ok(localStorage.getItem('token'));
+          if (t) return t;
+        } catch (e) {}
+        return '';
+      })();
+    `;
+
     async function captureTokenFromWebview(acc, webview, opts) {
       if (!acc || !webview) return null;
       // silent by default — only manual "refresh" should notify
       const notify = opts && opts.notify;
+      const light = !!(opts && opts.light);
       try {
-        const raw = await webview.executeJavaScript(EXTRACT_TOKEN_SCRIPT, true);
+        let raw = await webview.executeJavaScript(
+          light ? EXTRACT_TOKEN_LIGHT : EXTRACT_TOKEN_SCRIPT,
+          true
+        );
+        // Manual refresh: if light path empty, fall back to full webpack walk
+        if ((!raw || cleanToken(raw).split('.').length < 3) && (notify || !light)) {
+          if (light && notify) {
+            raw = await webview.executeJavaScript(EXTRACT_TOKEN_SCRIPT, true);
+          } else if (!light) {
+            /* already full */
+          } else {
+            /* silent light-only: do not run heavy webpack on background */
+          }
+        }
+        if ((!raw || cleanToken(raw).split('.').length < 3) && notify) {
+          raw = await webview.executeJavaScript(EXTRACT_TOKEN_SCRIPT, true);
+        }
         const token = cleanToken(raw || '');
         if (!token || token.split('.').length < 3) {
           if (notify) setStatus(acc.id, 'refresh failed', 'err');
           return null;
         }
 
+        const same = acc.token === token;
         acc.token = token;
+        acc._tokenCapturedOnce = true;
         const input = document.getElementById('token-' + acc.id);
         if (input) input.value = token;
 
-        try {
-          await window.morit.saveAccountToken(acc.id, token);
-        } catch (_) {}
-        try { await persist(); } catch (_) {}
+        if (!same) {
+          try {
+            await window.morit.saveAccountToken(acc.id, token);
+          } catch (_) {}
+        }
+        // Never full-persist on silent scan — too heavy during Discord use
 
         if (notify) {
           setStatus(acc.id, 'refresh', 'ok');
@@ -1193,55 +1261,78 @@ Use user/pass or refresh login per account. Data saves locally.</p>
       return [...pinned, ...rest].map((id) => state.accounts.get(id)).filter(Boolean);
     }
 
-    async function persist() {
-      const names = {};
-      const tokens = {};
-      const loginModes = {};
-      const lastUrls = {};
-      const pages = {};
-      const pinned = {};
-      const order = getOrderedAccounts().map((a) => a.id);
-      state.order = order;
+    let _persistBusy = false;
+    let _persistQueued = false;
 
-      for (const [id, acc] of state.accounts) {
-        names[id] = acc.name;
-        tokens[id] = acc.token || '';
-        loginModes[id] = acc.loginMode || 'standard';
-        pinned[id] = !!acc.pinned;
-        if (Array.isArray(acc.pages)) {
-          for (const p of acc.pages) {
-            const wv = document.getElementById('wv-' + pageKey(id, p.id));
-            if (wv) {
-              try {
-                const u = wv.getURL();
-                if (u && u !== 'about:blank') p.url = u;
-              } catch (_) {}
+    async function persist(opts) {
+      // debounce concurrent saves (navigate storms used to flood disk + IPC)
+      if (_persistBusy) {
+        _persistQueued = true;
+        return;
+      }
+      _persistBusy = true;
+      try {
+        const names = {};
+        const tokens = {};
+        const loginModes = {};
+        const lastUrls = {};
+        const pages = {};
+        const pinned = {};
+        const order = getOrderedAccounts().map((a) => a.id);
+        state.order = order;
+        const activeOnly = opts && opts.activeOnly;
+
+        for (const [id, acc] of state.accounts) {
+          names[id] = acc.name;
+          tokens[id] = acc.token || '';
+          loginModes[id] = acc.loginMode || 'standard';
+          pinned[id] = !!acc.pinned;
+          if (Array.isArray(acc.pages)) {
+            // getURL on every webview is expensive — only probe active account by default
+            if (!activeOnly || id === state.activeId) {
+              for (const p of acc.pages) {
+                const wv = document.getElementById('wv-' + pageKey(id, p.id));
+                if (wv) {
+                  try {
+                    const u = wv.getURL();
+                    if (u && u !== 'about:blank') p.url = u;
+                  } catch (_) {}
+                }
+              }
             }
+            const main = acc.pages.find((p) => p.id === 'main') || acc.pages[0];
+            lastUrls[id] = (main && main.url) || DISCORD_APP;
+            pages[id] = {
+              activePageId: acc.activePageId || 'main',
+              list: acc.pages.map((p) => ({
+                id: p.id,
+                title: p.title,
+                url: p.url
+              }))
+            };
           }
-          const main = acc.pages.find((p) => p.id === 'main') || acc.pages[0];
-          lastUrls[id] = (main && main.url) || DISCORD_APP;
-          pages[id] = {
-            activePageId: acc.activePageId || 'main',
-            list: acc.pages.map((p) => ({
-              id: p.id,
-              title: p.title,
-              url: p.url
-            }))
-          };
+        }
+        await window.morit.saveAppData({
+          names,
+          tokens,
+          loginModes,
+          lastUrls,
+          pages,
+          order,
+          pinned,
+          theme: state.theme,
+          sidebarWidth: state.sidebarWidth
+        });
+      } finally {
+        _persistBusy = false;
+        if (_persistQueued) {
+          _persistQueued = false;
+          setTimeout(() => persist(opts), 400);
         }
       }
-      await window.morit.saveAppData({
-        names,
-        tokens,
-        loginModes,
-        lastUrls,
-        pages,
-        order,
-        pinned,
-        theme: state.theme,
-        sidebarWidth: state.sidebarWidth
-      });
     }
+
+    const persistDebounced = debounce(() => persist({ activeOnly: true }), 1200);
 
     function notifyAccountLoggedOut(acc) {
       if (!acc || acc.loggedOutNotified) return;
@@ -1278,18 +1369,31 @@ Use user/pass or refresh login per account. Data saves locally.</p>
       if (st && /logged out/i.test(st.textContent || '')) setStatus(acc.id, '');
       if (wasOut) renderAccountList();
 
-      // Silent background token scan (no toast / no loading flicker)
+      // Token scan ONCE per login session — never on every Discord channel/chat navigate
+      // (old path ran webpack extract + full persist on each SPA route → major lag)
+      if (acc._tokenCapturedOnce && acc.token) return;
       try {
         const mainKey = pageKey(acc.id, 'main');
         const wv = document.getElementById('wv-' + mainKey);
-        if (wv) {
-          clearTimeout(acc._tokenCaptureTimer);
-          const silent = () => captureTokenFromWebview(acc, wv, { notify: false });
-          // one quiet pass + one delayed retry if Discord writes token late
-          silent();
-          acc._tokenCaptureTimer = setTimeout(silent, 2500);
-        }
+        if (!wv) return;
+        clearTimeout(acc._tokenCaptureTimer);
+        const silent = async () => {
+          if (acc._tokenCapturedOnce && acc.token) return;
+          const t = await captureTokenFromWebview(acc, wv, { notify: false, light: true });
+          if (t) acc._tokenCapturedOnce = true;
+        };
+        acc._tokenCaptureTimer = setTimeout(silent, 1800);
       } catch (_) {}
+    }
+
+    /** Cheap login/logout status from URL — debounced so SPA spam doesn't freeze UI */
+    function handleMainUrlStatus(acc, url) {
+      if (!acc || !url) return;
+      clearTimeout(acc._urlStatusTimer);
+      acc._urlStatusTimer = setTimeout(() => {
+        if (isDiscordLoginUrl(url)) notifyAccountLoggedOut(acc);
+        else if (isDiscordAppUrl(url)) markAccountLoggedIn(acc);
+      }, 350);
     }
 
     function isDiscordLoginUrl(url) {
@@ -1588,15 +1692,12 @@ Use user/pass or refresh login per account. Data saves locally.</p>
       const key = pageKey(acc.id, pageId);
       const wv = document.getElementById('wv-' + key);
       if (wv) {
-        requestAnimationFrame(() => {
-          fixWebview(wv);
-          setTimeout(() => fixWebview(wv), 80);
-        });
+        requestAnimationFrame(() => fixWebview(wv));
       } else {
         const page = acc.pages.find((p) => p.id === pageId);
         if (page) mountPageWebview(acc, page);
       }
-      persist();
+      persistDebounced();
     }
 
     async function closePageTab(acc, pageId) {
@@ -1724,6 +1825,7 @@ Use user/pass or refresh login per account. Data saves locally.</p>
       document.getElementById('clear-' + acc.id).addEventListener('click', async () => {
         setStatus(acc.id, 'Clearing…');
         await window.morit.clearPartition(partition);
+        acc._tokenCapturedOnce = false;
         // Clear auto-login flags for this account
         for (const k of [...state.autoLogged]) {
           if (k.startsWith(acc.id + '::')) state.autoLogged.delete(k);
@@ -1786,19 +1888,21 @@ Use user/pass or refresh login per account. Data saves locally.</p>
         if (!firstPaintDone) {
           firstPaintDone = true;
           setPageLoading(acc.id, page.id, false);
+          fixWebview(wv);
         }
-        fixWebview(wv);
         try {
           const u = wv.getURL();
           if (u && u !== 'about:blank') {
             page.url = u;
-            page.title = page.id === 'main' ? 'Discord' : titleFromUrl(u);
-            renderPageTabs(acc);
+            if (page.id !== 'main') {
+              const nextTitle = titleFromUrl(u);
+              if (page.title !== nextTitle) {
+                page.title = nextTitle;
+                renderPageTabs(acc);
+              }
+            }
           }
-          if (page.id === 'main') {
-            if (isDiscordLoginUrl(u)) notifyAccountLoggedOut(acc);
-            else if (isDiscordAppUrl(u)) markAccountLoggedIn(acc);
-          }
+          if (page.id === 'main') handleMainUrlStatus(acc, u);
         } catch (_) {}
       });
       wv.addEventListener('did-fail-load', (e) => {
@@ -1811,33 +1915,32 @@ Use user/pass or refresh login per account. Data saves locally.</p>
         if (!firstPaintDone) {
           firstPaintDone = true;
           setPageLoading(acc.id, page.id, false);
+          fixWebview(wv);
         }
-        fixWebview(wv);
       });
       wv.addEventListener('page-title-updated', (e) => {
         if (page.id !== 'main' && e.title) {
-          page.title = e.title.slice(0, 40);
-          renderPageTabs(acc);
+          const t = e.title.slice(0, 40);
+          if (page.title !== t) {
+            page.title = t;
+            renderPageTabs(acc);
+          }
         }
       });
       wv.addEventListener('did-navigate', (e) => {
         if (e.url) {
           page.url = e.url;
-          if (page.id !== 'main') page.title = titleFromUrl(e.url);
-          renderPageTabs(acc);
-          if (page.id === 'main') {
-            if (isDiscordLoginUrl(e.url)) notifyAccountLoggedOut(acc);
-            else if (isDiscordAppUrl(e.url)) markAccountLoggedIn(acc);
+          if (page.id !== 'main') {
+            page.title = titleFromUrl(e.url);
+            renderPageTabs(acc);
           }
+          if (page.id === 'main') handleMainUrlStatus(acc, e.url);
         }
       });
       wv.addEventListener('did-navigate-in-page', (e) => {
         if (e.url) {
           page.url = e.url;
-          if (page.id === 'main') {
-            if (isDiscordLoginUrl(e.url)) notifyAccountLoggedOut(acc);
-            else if (isDiscordAppUrl(e.url)) markAccountLoggedIn(acc);
-          }
+          if (page.id === 'main') handleMainUrlStatus(acc, e.url);
         }
       });
       wv.addEventListener('new-window', (e) => {
@@ -2010,11 +2113,25 @@ Use user/pass or refresh login per account. Data saves locally.</p>
 
       const pageId = (acc && acc.activePageId) || 'main';
       const wv = document.getElementById('wv-' + pageKey(id, pageId));
-      requestAnimationFrame(() => {
-        fixWebview(wv);
-        setTimeout(() => fixWebview(wv), 100);
-        setTimeout(() => fixWebview(wv), 300);
-      });
+      // One layout fix after switch — not 3 timed passes
+      requestAnimationFrame(() => fixWebview(wv));
+      // Throttle inactive Discord guests (each account = full Chromium + Discord)
+      try {
+        document.querySelectorAll('.panel').forEach((p) => {
+          const active = p.id === 'panel-' + id;
+          p.querySelectorAll('webview').forEach((guest) => {
+            try {
+              if (typeof guest.setAudioMuted === 'function') guest.setAudioMuted(!active);
+            } catch (_) {}
+            try {
+              const gid = guest.getWebContentsId && guest.getWebContentsId();
+              if (gid && window.morit.setWebviewThrottle) {
+                window.morit.setWebviewThrottle(gid, !active);
+              }
+            } catch (_) {}
+          });
+        });
+      } catch (_) {}
     }
 
     async function removeAccount(id) {
@@ -2061,8 +2178,8 @@ Use user/pass or refresh login per account. Data saves locally.</p>
       try { persist(); } catch (_) {}
     });
     setInterval(() => {
-      if (state.accounts.size) persist();
-    }, 45000);
+      if (state.accounts.size) persist({ activeOnly: true });
+    }, 90000);
 
     function openAccountModal(editId) {
       state.modalEditId = editId || null;

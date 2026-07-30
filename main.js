@@ -7,7 +7,8 @@ const {
   net,
   Tray,
   Menu,
-  nativeImage
+  nativeImage,
+  webContents
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -247,13 +248,16 @@ function createWindow() {
     title: 'MoritApp',
     backgroundColor: '#0c0c0c',
     show: false,
+    backgroundThrottling: true,
     icon: resolveAppIcon(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
-      webviewTag: true
+      webviewTag: true,
+      backgroundThrottling: true,
+      spellcheck: false
     }
   });
 
@@ -495,6 +499,18 @@ app.whenReady().then(() => {
       const ses = session.fromPartition(partitionName, { cache: true });
       ses.setUserAgent(CHROME_UA);
       return { success: true, userAgent: CHROME_UA };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // Throttle / unthrottle a webview guest (inactive Discord accounts)
+  ipcMain.handle('set-webview-throttle', (_e, { webContentsId, throttle }) => {
+    try {
+      const wc = webContents.fromId(Number(webContentsId));
+      if (!wc || wc.isDestroyed()) return { success: false };
+      wc.setBackgroundThrottling(!!throttle);
+      return { success: true };
     } catch (err) {
       return { success: false, error: err.message };
     }
