@@ -69,14 +69,19 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout (install.ps1)
+        uses: actions/checkout@v4
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: release-assets
           merge-multiple: true
 
-      - name: List release files
-        run: find release-assets -type f | sort
+      - name: Add Windows install.ps1 to release assets
+        run: |
+          cp install.ps1 release-assets/install.ps1
+          find release-assets -type f | sort
 
       - name: Attach to GitHub Release
         uses: softprops/action-gh-release@v2
@@ -84,5 +89,21 @@ jobs:
           files: release-assets/*
           generate_release_notes: true
           fail_on_unmatched_files: false
+          body: |
+            ## Install (Windows)
+
+            PowerShell one-liner:
+
+            ```powershell
+            irm https://raw.githubusercontent.com/kgs142c/MoritApp/main/install.ps1 | iex
+            ```
+
+            Or from this release:
+
+            ```powershell
+            irm https://github.com/kgs142c/MoritApp/releases/latest/download/install.ps1 | iex
+            ```
+
+            Mac/Linux terminal install is set aside for later — use the `.dmg` / AppImage / `.deb` assets below.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
