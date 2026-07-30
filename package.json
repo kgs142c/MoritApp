@@ -3,7 +3,10 @@
   "version": "1.0.12",
   "description": "MoritApp multi-session desktop workspace client",
   "main": "main.js",
-  "author": "MoritApp",
+  "author": {
+    "name": "MoritApp",
+    "email": "kgs142c@users.noreply.github.com"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -118,6 +121,7 @@
       "category": "Network",
       "icon": "build/icon.png",
       "artifactName": "MoritApp-${version}-linux-${arch}.${ext}",
+      "maintainer": "MoritApp <kgs142c@users.noreply.github.com>",
       "synopsis": "MoritApp multi-session desktop workspace",
       "description": "Multi-session Discord desktop client with local save and auto-update.",
       "desktop": {
