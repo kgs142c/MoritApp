@@ -784,7 +784,7 @@
 <body>
   <div class="app-titlebar">
     <span class="icon"></span>
-    <span class="caption" id="app-caption">MoritApp [Version …] - auto-update OK</span>
+    <span class="caption" id="app-caption">MoritApp [Version …] - Microsoft Windows Console</span>
   </div>
 
   <aside id="sidebar">
@@ -793,7 +793,6 @@
       <div class="sidebar-tools">
         <button class="btn btn-ghost" id="btn-theme">color</button>
         <button class="btn btn-ghost" id="btn-hotkeys">help</button>
-        <button class="btn btn-ghost" id="btn-update" title="Check for updates">update</button>
       </div>
     </div>
     <div class="update-banner" id="update-banner" role="button" tabindex="0"></div>
@@ -877,7 +876,7 @@ Use user/pass or refresh login per account. Data saves locally.</p>
           <li><b>Ctrl + Tab</b> — next account</li>
           <li><b>Alt + Left/Right</b> — back / forward</li>
           <li><b>Ctrl + R</b> — reload active account</li>
-          <li><b>update</b> (sidebar) — check for new app version (auto from GitHub)</li>
+
           <li><b>color</b> — gray CMD ↔ green text</li>
         </ul>
         <div class="modal-actions">
@@ -997,7 +996,6 @@ Use user/pass or refresh login per account. Data saves locally.</p>
 
     function wireAutoUpdateUI() {
       const banner = document.getElementById('update-banner');
-      const btn = document.getElementById('btn-update');
 
       async function installNow() {
         toast('Installing update…');
@@ -1008,16 +1006,10 @@ Use user/pass or refresh login per account. Data saves locally.</p>
         }
       }
 
+      // No update button — banner only appears when a new version is ready
       if (banner) {
         banner.addEventListener('click', () => {
           if (updateReadyVersion) installNow();
-        });
-      }
-      if (btn) {
-        btn.addEventListener('click', async () => {
-          toast('Checking updates…');
-          const res = await window.morit.checkForUpdates();
-          if (res && res.error) toast(res.error);
         });
       }
 
@@ -1025,8 +1017,7 @@ Use user/pass or refresh login per account. Data saves locally.</p>
         window.morit.onUpdateEvent((ev) => {
           if (!ev || !ev.type) return;
           if (ev.type === 'available') {
-            setUpdateBanner('Update ' + (ev.version || '') + ' downloading…', 'progress');
-            toast('Update available: v' + (ev.version || ''), { ms: 4000 });
+            setUpdateBanner('Update v' + (ev.version || '') + ' downloading…', 'progress');
           } else if (ev.type === 'progress') {
             setUpdateBanner('Downloading update… ' + (ev.percent || 0) + '%', 'progress');
           } else if (ev.type === 'downloaded') {
@@ -1037,20 +1028,15 @@ Use user/pass or refresh login per account. Data saves locally.</p>
               ms: 20000,
               onClick: installNow
             });
-          } else if (ev.type === 'none') {
-            // quiet unless user clicked check
-          } else if (ev.type === 'error') {
-            // keep quiet on background failures (unsigned/network)
           }
+          // silent on none / error — no UI spam
         });
       }
 
-      // Titlebar version
       window.morit.getAppVersion().then((v) => {
         const cap = document.getElementById('app-caption');
-        // Visible marker so auto-update test is obvious (v1.0.5+)
         if (cap && v) {
-          cap.textContent = 'MoritApp [Version ' + v + '] - auto-update OK';
+          cap.textContent = 'MoritApp [Version ' + v + '] - Microsoft Windows Console';
         }
       }).catch(() => {});
     }
@@ -2456,6 +2442,8 @@ Use user/pass or refresh login per account. Data saves locally.</p>
       tracks: [],
       index: 0,
       playing: false,
+      wantPlay: false, // keep auto-playing through next/skip
+      failStreak: 0,
       audio: document.getElementById('music-audio'),
       video: document.getElementById('music-video'),
       player: document.getElementById('music-player'),
@@ -2515,6 +2503,7 @@ Use user/pass or refresh login per account. Data saves locally.</p>
         music.audio.removeAttribute('src');
         music.video.removeAttribute('src');
         music.playing = false;
+        music.wantPlay = false;
         updateMusicUI();
         return;
       }
@@ -2524,6 +2513,8 @@ Use user/pass or refresh login per account. Data saves locally.</p>
       pauseAllMedia();
       music.audio.removeAttribute('src');
       music.video.removeAttribute('src');
+      try { music.audio.load(); } catch (_) {}
+      try { music.video.load(); } catch (_) {}
 
       const el = isMp4Track(t) ? music.video : music.audio;
       music.video.muted = false;
@@ -2532,15 +2523,37 @@ Use user/pass or refresh login per account. Data saves locally.</p>
       updateMusicUI();
 
       if (autoplay) {
-        el.play().then(() => {
-          music.playing = true;
-          updateMusicUI();
-        }).catch(() => {
-          music.playing = false;
-          updateMusicUI();
-          toast('Play blocked — click ▶ play');
-        });
+        music.wantPlay = true;
+        const tryPlay = () => {
+          el.play().then(() => {
+            music.playing = true;
+            music.failStreak = 0;
+            updateMusicUI();
+          }).catch(() => {
+            // Autoplay policy or bad file → skip to next (same as error)
+            skipBrokenTrack();
+          });
+        };
+        // Wait a tick for media element to bind src
+        setTimeout(tryPlay, 80);
+      } else {
+        music.wantPlay = false;
       }
+    }
+
+    function skipBrokenTrack() {
+      if (!music.tracks.length) return;
+      music.failStreak = (music.failStreak || 0) + 1;
+      // Avoid infinite loop if every track is broken
+      if (music.failStreak >= music.tracks.length) {
+        music.playing = false;
+        music.wantPlay = false;
+        updateMusicUI();
+        toast('All tracks failed — reload playlist');
+        return;
+      }
+      // Always autoplay next when skipping errors
+      loadTrack(music.index + 1, true);
     }
 
     async function musicPlayToggle() {
@@ -2556,13 +2569,16 @@ Use user/pass or refresh login per account. Data saves locally.</p>
       if (music.playing) {
         el.pause();
         music.playing = false;
+        music.wantPlay = false;
       } else {
+        music.wantPlay = true;
         try {
           await el.play();
           music.playing = true;
+          music.failStreak = 0;
         } catch (_) {
-          toast('Could not play this track');
-          music.playing = false;
+          skipBrokenTrack();
+          return;
         }
       }
       updateMusicUI();
@@ -2570,22 +2586,26 @@ Use user/pass or refresh login per account. Data saves locally.</p>
 
     function musicStop() {
       const el = mediaEl();
-      el.pause();
-      el.currentTime = 0;
+      try { el.pause(); } catch (_) {}
+      try { el.currentTime = 0; } catch (_) {}
       music.playing = false;
+      music.wantPlay = false;
       updateMusicUI();
     }
 
     function musicNext() {
       if (!music.tracks.length) return;
-      const wasPlaying = music.playing;
-      loadTrack(music.index + 1, wasPlaying);
+      // Keep playing if already playing / auto-play mode; else just advance
+      const keep = music.playing || music.wantPlay;
+      loadTrack(music.index + 1, keep);
     }
 
     async function reloadPlaylist(opts) {
       const quiet = opts && opts.quiet;
+      const autoplay = !!(opts && opts.autoplay);
       try {
         music.tracks = await window.morit.listMusic();
+        music.failStreak = 0;
         if (!music.tracks.length) {
           musicStop();
           music.audio.removeAttribute('src');
@@ -2594,7 +2614,7 @@ Use user/pass or refresh login per account. Data saves locally.</p>
           if (!quiet) toast('No tracks in /music');
           return;
         }
-        const keepPlaying = music.playing;
+        const keepPlaying = music.playing || music.wantPlay || autoplay;
         const cur = (mediaEl().src || '');
         let idx = music.tracks.findIndex((t) => cur && cur.includes(encodeURIComponent(t.file)));
         if (idx < 0) idx = 0;
@@ -2609,22 +2629,19 @@ Use user/pass or refresh login per account. Data saves locally.</p>
     music.btnPlay.addEventListener('click', musicPlayToggle);
     music.btnStop.addEventListener('click', musicStop);
     music.btnNext.addEventListener('click', musicNext);
-    document.getElementById('music-reload').addEventListener('click', () => reloadPlaylist({ quiet: false }));
+    document.getElementById('music-reload').addEventListener('click', () =>
+      reloadPlaylist({ quiet: false, autoplay: music.playing || music.wantPlay })
+    );
 
     function onMediaEnded() {
-      if (music.tracks.length > 1) {
-        loadTrack(music.index + 1, true);
-      } else {
-        music.playing = false;
-        const el = mediaEl();
-        el.currentTime = 0;
-        updateMusicUI();
-      }
+      // Always auto-next (loop playlist) and keep playing
+      if (!music.tracks.length) return;
+      music.failStreak = 0;
+      loadTrack(music.index + 1, true);
     }
     function onMediaError() {
-      music.playing = false;
-      updateMusicUI();
-      toast('Track error — try another file');
+      // Bad first track / codec issue → skip automatic, keep playlist going
+      skipBrokenTrack();
     }
     music.audio.addEventListener('ended', onMediaEnded);
     music.video.addEventListener('ended', onMediaEnded);
@@ -2635,7 +2652,8 @@ Use user/pass or refresh login per account. Data saves locally.</p>
 
     (async function boot() {
       try {
-        await reloadPlaylist({ quiet: true });
+        // Load playlist and auto-play first playable track
+        await reloadPlaylist({ quiet: true, autoplay: true });
         try {
           if (window.Notification && Notification.permission === 'default') {
             Notification.requestPermission();

@@ -235,6 +235,7 @@ function listMusicTracks() {
   } catch (_) {
     return [];
   }
+  // Prefer audio-first so broken/odd mp4s don't block autoplay on first track
   return files
     .filter((f) => AUDIO_EXT.has(path.extname(f).toLowerCase()))
     .map((audio) => {
@@ -245,6 +246,12 @@ function listMusicTracks() {
         file: audio,
         audioUrl: 'morit-asset://music/' + encodeURIComponent(audio)
       };
+    })
+    .sort((a, b) => {
+      const aMp4 = /\.mp4$/i.test(a.file) ? 1 : 0;
+      const bMp4 = /\.mp4$/i.test(b.file) ? 1 : 0;
+      if (aMp4 !== bMp4) return aMp4 - bMp4;
+      return String(a.title).localeCompare(String(b.title), undefined, { sensitivity: 'base' });
     });
 }
 
