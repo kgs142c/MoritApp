@@ -408,6 +408,49 @@
     .music-controls button.active-play {
       color: var(--success);
     }
+    .music-volume {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px 8px;
+      border-top: 1px solid var(--border);
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+    .music-volume label {
+      flex-shrink: 0;
+      font-family: var(--font);
+      color: var(--success);
+      min-width: 3.5em;
+    }
+    .music-volume label::before {
+      content: "> ";
+      color: var(--success);
+    }
+    .music-volume input[type="range"] {
+      flex: 1;
+      min-width: 0;
+      height: 4px;
+      -webkit-appearance: none;
+      appearance: none;
+      background: var(--border);
+      outline: none;
+      cursor: pointer;
+    }
+    .music-volume input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 12px;
+      height: 12px;
+      background: var(--success);
+      border: 1px solid var(--text-strong);
+      cursor: pointer;
+    }
+    .music-volume .vol-pct {
+      min-width: 2.5em;
+      text-align: right;
+      color: var(--text);
+      font-family: var(--font);
+    }
 
     .music-extra {
       display: grid;
@@ -938,6 +981,11 @@
         <button type="button" id="music-stop" title="Stop">■ stop</button>
         <button type="button" id="music-next" title="Next track">» next</button>
       </div>
+      <div class="music-volume" title="Volume">
+        <label for="music-vol">vol</label>
+        <input type="range" id="music-vol" min="0" max="100" value="70" step="1" />
+        <span class="vol-pct" id="music-vol-pct">70%</span>
+      </div>
       <div class="music-extra">
         <button type="button" id="music-reload" title="Reload playlist">reload</button>
       </div>
@@ -1232,6 +1280,15 @@ Use user/pass or refresh login per account. Data saves locally.</p>
         btnInstall.disabled = !ready && !preview;
         btnInstall.style.opacity = btnInstall.disabled ? '0.5' : '1';
       }
+
+      // Stop music the moment WARNING opens (busy Discord / re-nag included)
+      try {
+        if (typeof musicStop === 'function') musicStop();
+        else {
+          try { document.getElementById('music-audio')?.pause(); } catch (_) {}
+          try { document.getElementById('music-video')?.pause(); } catch (_) {}
+        }
+      } catch (_) {}
 
       updateModalOpen = true;
       overlay.classList.add('open');
@@ -2838,6 +2895,7 @@ Use user/pass or refresh login per account. Data saves locally.</p>
       playing: false,
       wantPlay: false, // keep auto-playing through next/skip
       failStreak: 0,
+      volume: 0.7,
       audio: document.getElementById('music-audio'),
       video: document.getElementById('music-video'),
       player: document.getElementById('music-player'),
@@ -2846,8 +2904,36 @@ Use user/pass or refresh login per account. Data saves locally.</p>
       eq: document.getElementById('music-eq'),
       btnPlay: document.getElementById('music-play'),
       btnStop: document.getElementById('music-stop'),
-      btnNext: document.getElementById('music-next')
+      btnNext: document.getElementById('music-next'),
+      volSlider: document.getElementById('music-vol'),
+      volPct: document.getElementById('music-vol-pct')
     };
+
+    function applyMusicVolume(vol) {
+      let v = Number(vol);
+      if (!Number.isFinite(v)) v = 0.7;
+      v = Math.max(0, Math.min(1, v));
+      music.volume = v;
+      try { music.audio.volume = v; } catch (_) {}
+      try { music.video.volume = v; } catch (_) {}
+      if (music.volSlider) music.volSlider.value = String(Math.round(v * 100));
+      if (music.volPct) music.volPct.textContent = Math.round(v * 100) + '%';
+      try { localStorage.setItem('morit_music_vol', String(v)); } catch (_) {}
+    }
+
+    function initMusicVolume() {
+      let saved = 0.7;
+      try {
+        const raw = localStorage.getItem('morit_music_vol');
+        if (raw != null && raw !== '') saved = parseFloat(raw);
+      } catch (_) {}
+      applyMusicVolume(saved);
+      if (music.volSlider) {
+        music.volSlider.addEventListener('input', () => {
+          applyMusicVolume(Number(music.volSlider.value) / 100);
+        });
+      }
+    }
 
     function isMp4Track(t) {
       return t && /\.mp4$/i.test(t.file || t.id || '');
@@ -2912,14 +2998,23 @@ Use user/pass or refresh login per account. Data saves locally.</p>
 
       const el = isMp4Track(t) ? music.video : music.audio;
       music.video.muted = false;
+      applyMusicVolume(music.volume);
       el.src = t.audioUrl;
       el.load();
       updateMusicUI();
 
-      if (autoplay) {
+      if (autoplay && !updateModalOpen) {
         music.wantPlay = true;
         const tryPlay = () => {
+          if (updateModalOpen) {
+            musicStop();
+            return;
+          }
           el.play().then(() => {
+            if (updateModalOpen) {
+              musicStop();
+              return;
+            }
             music.playing = true;
             music.failStreak = 0;
             updateMusicUI();
@@ -2979,9 +3074,9 @@ Use user/pass or refresh login per account. Data saves locally.</p>
     }
 
     function musicStop() {
-      const el = mediaEl();
-      try { el.pause(); } catch (_) {}
-      try { el.currentTime = 0; } catch (_) {}
+      pauseAllMedia();
+      try { music.audio.currentTime = 0; } catch (_) {}
+      try { music.video.currentTime = 0; } catch (_) {}
       music.playing = false;
       music.wantPlay = false;
       updateMusicUI();
@@ -3020,6 +3115,7 @@ Use user/pass or refresh login per account. Data saves locally.</p>
       }
     }
 
+    initMusicVolume();
     music.btnPlay.addEventListener('click', musicPlayToggle);
     music.btnStop.addEventListener('click', musicStop);
     music.btnNext.addEventListener('click', musicNext);
