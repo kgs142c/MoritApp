@@ -613,15 +613,32 @@
       color: var(--text-strong);
     }
 
-    /* Hidden: user/pass | refresh switch, sessions hint, token/login row */
-    .login-switch,
-    .token-row,
-    .standard-hint,
-    #modal-discord-opts {
-      display: none !important;
+    /* Token login toolbar (user/pass | refresh + token field) — visible in v1.0.16+ */
+    .token-row {
+      display: none;
+      flex: 1;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
     }
-    .token-row.visible { display: none !important; }
-    .standard-hint.visible { display: none !important; }
+    .token-row.visible { display: flex; }
+
+    .standard-hint {
+      display: none;
+      flex: 1;
+      font-size: 12px;
+      color: var(--text-dim);
+      min-width: 0;
+    }
+    .standard-hint.visible { display: block; }
+
+    /* Allow room for token row when refresh mode is on */
+    .panel .toolbar {
+      height: auto;
+      min-height: 48px;
+      max-height: none;
+      flex-wrap: wrap;
+    }
 
     .field {
       flex: 1;
@@ -2778,10 +2795,10 @@ Use user/pass or refresh login per account. Data saves locally.</p>
         els.modalTitle.textContent = 'add account';
         els.modalSub.textContent = 'Adds a new account on the left sidebar. Isolated session.';
         els.nameInput.value = 'Account ' + (state.accounts.size + 1);
-        state.modalMode = 'standard';
+        state.modalMode = 'token';
         els.confirmBtn.textContent = '+ Add Account';
-        // login mode hidden — always standard (user/pass webview)
-        document.getElementById('modal-discord-opts').style.display = 'none';
+        // login mode visible (user/pass | refresh/token) — default refresh for token login
+        document.getElementById('modal-discord-opts').style.display = 'block';
       }
       els.modalModeSwitch.querySelectorAll('button').forEach((btn) => {
         btn.classList.toggle('active', btn.dataset.mode === state.modalMode);
